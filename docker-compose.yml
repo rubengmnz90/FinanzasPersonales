@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-12345}
+      POSTGRES_DB: finanzas
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d finanzas"]
+      interval: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-12345}@db:5432/finanzas
+      SEED_EMAIL: ${SEED_EMAIL:-rubengmnz90@gmail.com}
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-}
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-false}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+      PORT: "3000"
+
+volumes:
+  pgdata:

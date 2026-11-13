@@ -1,0 +1,16 @@
+{
+  "name": "finanzas-personales",
+  "private": true,
+  "packageManager": "pnpm@10.10.0",
+  "scripts": {
+    "dev:server": "pnpm -F server dev",
+    "dev:web": "pnpm -F web dev",
+    "test": "pnpm -r test",
+    "build": "pnpm -F web build"
+  },
+  "pnpm": {
+    "overrides": {
+      "light-my-request>cookie": "1.0.2"
+    }
+  }
+}
