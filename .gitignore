@@ -6,3 +6,13 @@ dist
 coverage
 playwright-report
 test-results
+
+# Datos personales: nunca al repo
+*.xlsx
+*.xls
+*.csv
+backups/
+*.sql
+*.sql.gz
+.env.*
+!.env.example
