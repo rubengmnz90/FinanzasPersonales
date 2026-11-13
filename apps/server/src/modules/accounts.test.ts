@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeTestDb, makeUser, type TestCtx } from '../test/helpers';
 import { NotFoundError } from '../db/client';
-import { addEntry, createAccount, getLedger, listBalances, pendingTempWithdrawals } from './ledgers/service';
+import { addEntry, createAccount, getLedger, listBalances, pendingTempWithdrawals, savingsWithdrawals } from './ledgers/service';
 import { addAllocation, getRecovery, setCobro } from './recovery/service';
 import { addSplitItem, createSplit, getSplit } from './splits/service';
 import { createTransaction } from './transactions/service';
@@ -48,6 +48,10 @@ describe('ledgers', () => {
     await addEntry(ctx.db, a, s.id, { date: '2026-09-05', concept: 'Reponer Osky', rawAmount: -250000, tag: 'temp_withdrawal' });
     await addEntry(ctx.db, a, s.id, { date: '2026-09-20', concept: 'Devolución', rawAmount: 100000, tag: 'return' });
     expect(await pendingTempWithdrawals(ctx.db, a, s.id)).toBe(150000);
+    const w = await savingsWithdrawals(ctx.db, a, s.id);
+    expect(w.withdrawals.map((x) => [x.concept, x.amount])).toEqual([['Reponer Osky', 250000]]);
+    expect(w.totalReturned).toBe(100000);
+    expect(w.pending).toBe(150000);
   });
 
   it('aísla usuarios', async () => {

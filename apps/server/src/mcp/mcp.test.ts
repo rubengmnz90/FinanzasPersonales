@@ -157,6 +157,23 @@ describe('herramientas MCP', () => {
     await c.close();
   });
 
+  it('add_transaction en un ahorro registra la devolución de un retiro temporal', async () => {
+    const cookie = await webLogin('a@test.io', 'clave-a-12345');
+    const { tokens } = await fullFlow(cookie);
+    const c = await connect(tokens.access_token);
+    await ctx.db.query(
+      `INSERT INTO accounts(user_id,type,name) SELECT id,'savings','Ahorro Test' FROM users WHERE email='a@test.io' ON CONFLICT DO NOTHING`,
+    );
+    const savings = 'Ahorro Test';
+    await call(c, 'add_transaction', { account: savings, kind: 'expense', item: 'Reponer amor', amount: 91000, date: '2026-11-13' });
+    const back = await call(c, 'add_transaction', { account: savings, kind: 'income', item: 'Devolución Amor', amount: 91000, date: '2026-11-13' });
+    expect(back.isError).toBe(false);
+    expect(back.json.tag).toBe('return');
+    const w = await call(c, 'savings_withdrawals', { account: savings });
+    expect(w.json.pending).toBe(0);
+    await c.close();
+  });
+
   it('un token solo de lectura no puede escribir', async () => {
     const cookie = await webLogin('a@test.io', 'clave-a-12345');
     const { tokens } = await fullFlow(cookie, ['finanzas:read']);

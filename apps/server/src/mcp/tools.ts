@@ -1,12 +1,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { InvalidAmountError } from '@finanzas/shared';
+import { InvalidAmountError, parseAmount } from '@finanzas/shared';
 import { z } from 'zod';
 import { NotFoundError, ValidationError, type Db } from '../db/client';
 import { categoryIdByName, listCategories } from '../modules/categories/service';
 import { createTransaction, deleteTransaction, listTransactions, updateTransaction } from '../modules/transactions/service';
 import { createPlannedExpense, listPlannedExpenses, markDone } from '../modules/planned-expenses/service';
 import { comparePlans, getPlanView, listPlans } from '../modules/plans/service';
-import { accountIdByName, accountStatement, listBalances } from '../modules/ledgers/service';
+import { accountIdByName, accountStatement, addEntry, getAccount, listBalances, savingsWithdrawals } from '../modules/ledgers/service';
 import { createTransfer, deleteTransfer, listBuckets, saveBucket } from '../modules/transfers/service';
 import { listAudit, revertAction } from '../modules/audit/service';
 import { auditCtx } from '../db/context';
@@ -84,9 +84,19 @@ export function createMcpServer(ctx: McpCtx): McpServer {
   tool(
     'add_transaction',
     'finanzas:write',
-    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta.',
-    { date: D.optional().describe('Por defecto hoy'), item: z.string().min(1), kind: z.enum(['income', 'expense']), amount: Amt, category: z.string().optional().describe('Nombre exacto de la categoría'), account: z.string().optional().describe('Nombre de la cuenta (list_accounts)'), note: z.string().optional() },
+    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta. Si `account` es un ahorro (p. ej. Ahorro Coomecipar) se anota en la cuenta: un ingreso sin `bucket` es la devolución de un retiro temporal; con `bucket` es un aporte a ese objetivo; un egreso es un retiro temporal.',
+    { date: D.optional().describe('Por defecto hoy'), item: z.string().min(1), kind: z.enum(['income', 'expense']), amount: Amt, category: z.string().optional().describe('Nombre exacto de la categoría'), account: z.string().optional().describe('Nombre de la cuenta (list_accounts)'), bucket: z.string().optional().describe('Solo ahorros: objetivo del aporte (Ahorro, Vacaciones...)'), note: z.string().optional() },
     async (a) => {
+      if (a.account) {
+        const sid = await accountIdByName(db, userId, a.account);
+        if (sid && (await getAccount(db, userId, sid)).type === 'savings') {
+          const date = a.date ?? new Date().toISOString().slice(0, 10);
+          const value = Math.abs(parseAmount(a.amount));
+          const tag = a.kind === 'expense' ? 'temp_withdrawal' : a.bucket ? null : 'return';
+          const id = await addEntry(db, userId, sid, { date, concept: a.item, rawAmount: a.kind === 'income' ? value : -value, tag, bucket: a.bucket ?? null });
+          return { id, account: a.account, date, concept: a.item, kind: a.kind, tag, bucket: a.bucket ?? null };
+        }
+      }
       const categoryId = a.category ? await categoryIdByName(db, userId, a.category) : null;
       if (a.category && !categoryId) throw new NotFoundError(`categoría "${a.category}" (usa list_categories)`);
       const accountId = a.account ? await accountIdByName(db, userId, a.account) : undefined;
@@ -100,6 +110,18 @@ export function createMcpServer(ctx: McpCtx): McpServer {
         categoryId,
         note: a.note ?? null,
       });
+    },
+  );
+
+  tool(
+    'savings_withdrawals',
+    'finanzas:read',
+    'Detalle de lo retirado del ahorro (por concepto, ej. "Reponer Osky") y lo ya devuelto, con el pendiente.',
+    { account: z.string().optional().describe('Por defecto Ahorro Coomecipar') },
+    async (a) => {
+      const id = await accountIdByName(db, userId, a.account ?? 'Ahorro Coomecipar');
+      if (!id) throw new NotFoundError(`cuenta "${a.account ?? 'Ahorro Coomecipar'}" (usa list_accounts)`);
+      return savingsWithdrawals(db, userId, id);
     },
   );
 

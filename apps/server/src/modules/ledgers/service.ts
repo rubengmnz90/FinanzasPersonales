@@ -389,3 +389,27 @@ export async function pendingTempWithdrawals(db: Queryable, userId: string, acco
   );
   return r.rows[0].p;
 }
+
+export interface SavingsWithdrawals {
+  /** Retiros temporales (tag temp_withdrawal) con su concepto: lo que se sacó del ahorro y debe reponerse. */
+  withdrawals: { id: string; date: string; concept: string; amount: number }[];
+  /** Devoluciones al ahorro (tag return). */
+  returns: { id: string; date: string; concept: string; amount: number }[];
+  totalWithdrawn: number;
+  totalReturned: number;
+  pending: number;
+}
+
+/** Detalle de lo retirado del ahorro por concepto y lo ya devuelto. */
+export async function savingsWithdrawals(db: Queryable, userId: string, accountId: string): Promise<SavingsWithdrawals> {
+  await getAccount(db, userId, accountId);
+  const r = await db.query(
+    `SELECT id, date, concept, amount, tag FROM ledger_entries WHERE account_id=$1 AND tag IN ('temp_withdrawal','return') ORDER BY date, seq`,
+    [accountId],
+  );
+  const withdrawals = r.rows.filter((e: any) => e.tag === 'temp_withdrawal').map((e: any) => ({ id: e.id, date: e.date, concept: e.concept, amount: -e.amount }));
+  const returns = r.rows.filter((e: any) => e.tag === 'return').map((e: any) => ({ id: e.id, date: e.date, concept: e.concept, amount: e.amount }));
+  const totalWithdrawn = withdrawals.reduce((s: number, x: any) => s + x.amount, 0);
+  const totalReturned = returns.reduce((s: number, x: any) => s + x.amount, 0);
+  return { withdrawals, returns, totalWithdrawn, totalReturned, pending: totalWithdrawn - totalReturned };
+}
