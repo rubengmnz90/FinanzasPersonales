@@ -16,3 +16,4 @@ backups/
 *.sql.gz
 .env.*
 !.env.example
+.mcp.json
