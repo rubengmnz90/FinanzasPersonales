@@ -102,6 +102,11 @@ export async function buildApp(db: Db, opts: AppOptions = {}): Promise<FastifyIn
     req.user = u;
   };
 
+  // Salud para Docker y balanceadores: sin sesión, confirma que la base responde.
+  app.get('/healthz', async (_req, reply) => {
+    try { await db.query('SELECT 1'); return { ok: true }; } catch { return reply.code(503).send({ ok: false }); }
+  });
+
   app.get('/api/me', { preHandler: authenticate }, async (req) => req.user);
 
   app.post('/api/auth/change-password', { preHandler: authenticate }, async (req, reply) => {

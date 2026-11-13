@@ -17,25 +17,51 @@ pnpm -F server start        # http://localhost:3000
 
 Tests: `pnpm test` (necesita `TEST_DATABASE_URL`); E2E: `cd apps/web && npx playwright test` (usa la base `finanzas_test`, instala Chrome del sistema).
 
-## Docker
+## Despliegue en tu servidor (Docker)
+
+Requisitos: un servidor con Docker y el plugin Compose.
 
 ```
-cp .env.example .env        # SEED_USER_PASSWORD, POSTGRES_PASSWORD, PUBLIC_URL
+git clone https://github.com/rubengmnz90/FinanzasPersonales.git
+cd FinanzasPersonales
+cp .env.example .env     # edítalo: POSTGRES_PASSWORD, SEED_USER_PASSWORD, PUBLIC_URL
 docker compose up -d --build
 ```
 
-La app queda en `PUBLIC_URL` (por defecto http://localhost:3000). Al arrancar migra y siembra el usuario `SEED_EMAIL`; el primer ingreso obliga a cambiar la contraseña (mínimo 8 caracteres). El registro está cerrado (`ALLOW_SIGNUP=false`).
+- La app escucha en el puerto `PORT` (3000) y la base Postgres queda dentro de la red de Docker, sin publicarse.
+- Al arrancar **migra** la base y **siembra** el usuario `SEED_EMAIL` con la clave `SEED_USER_PASSWORD` (solo si aún no existe; nunca pisa la contraseña de un usuario existente). El primer ingreso obliga a cambiarla (mínimo 8 caracteres). El registro está cerrado (`ALLOW_SIGNUP=false`).
+- `GET /healthz` responde `{"ok":true}` cuando la app y la base funcionan; Docker lo usa como healthcheck (`docker compose ps` muestra `healthy`).
+- Datos persistentes en el volumen `pgdata`. No lo borres con `docker compose down -v`.
 
-Importar el Excel dentro del contenedor:
+### HTTPS y dominio
+
+Publica la app detrás de un proxy con HTTPS y pon `PUBLIC_URL=https://tu-dominio` en `.env` (activa cookies `secure` y es la URL que usa la IA por MCP). Ejemplo con Caddy (certificado automático):
 
 ```
+tu-dominio.com {
+    reverse_proxy localhost:3000
+}
+```
+
+### Base de datos externa (p. ej. Supabase)
+
+Define `DATABASE_URL` en `.env` y levanta solo la app: `docker compose -f docker-compose.external.yml up -d --build`. Con Supabase usa la cadena del *Session pooler* (puerto 5432) y activa RLS en las tablas de `public` (la app se conecta con el rol `postgres`, que no la sufre).
+
+### Actualizar, respaldar, importar
+
+```
+git pull && docker compose up -d --build          # actualizar (las migraciones corren solas)
+docker compose exec db pg_dump -U postgres finanzas > backup.sql      # respaldo
 docker compose cp "Administracion 2026.xlsx" app:/tmp/admin.xlsx
-docker compose exec app pnpm import-excel --file /tmp/admin.xlsx
+docker compose exec app ./node_modules/.bin/tsx src/import/cli.ts --file /tmp/admin.xlsx   # importar el Excel
 ```
 
-Backup: `docker compose exec db pg_dump -U postgres finanzas > backup.sql`
+### Antes de abrirlo a internet
 
-Si publicas con HTTPS, pon `PUBLIC_URL=https://...` (activa cookies `secure`).
+- Cambia `POSTGRES_PASSWORD` y `SEED_USER_PASSWORD` (no dejes `12345`) y no subas `.env`.
+- Mantén `ALLOW_SIGNUP=false`.
+- Programa el respaldo de `pg_dump` (cron) y guárdalo fuera del servidor.
+- Todo cambio queda en **Historial** (con deshacer), incluidos los de la IA.
 
 ## Conectar una IA (MCP)
 

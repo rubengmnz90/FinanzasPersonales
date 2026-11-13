@@ -1,3 +1,5 @@
+# Levanta la app + su base Postgres:  docker compose up -d --build
+# Con una base externa (p. ej. Supabase): docker-compose.external.yml
 services:
   db:
     image: postgres:16
@@ -12,6 +14,7 @@ services:
       test: ["CMD-SHELL", "pg_isready -U postgres -d finanzas"]
       interval: 5s
       retries: 10
+    # La base no se publica fuera de la red de Docker.
 
   app:
     build: .

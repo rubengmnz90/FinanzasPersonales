@@ -1,0 +1,16 @@
+# Solo la app, con una base Postgres externa (p. ej. Supabase):
+#   docker compose -f docker-compose.external.yml up -d --build
+# Requiere DATABASE_URL en el entorno o en .env (ver .env.example).
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Define DATABASE_URL}
+      SEED_EMAIL: ${SEED_EMAIL:-rubengmnz90@gmail.com}
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-}
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-false}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+      PORT: "3000"
