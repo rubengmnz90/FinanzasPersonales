@@ -15,6 +15,7 @@ const MESSAGES: Record<string, string> = {
   BUCKET_UNTOUCHABLE: 'Ese objetivo es intocable: confirma que quieres usarlo.',
   ACCOUNT_NOT_ALLOWED: 'El flujo solo usa cuentas propias marcadas para el flujo.',
   ALREADY_PAID: 'La cuota ya está pagada.',
+  ARCHIVO_INVALIDO: 'No pude leer ese archivo. Sube el Excel "Administracion 2026.xlsx".',
 };
 
 export const friendly = (e: unknown): string => {
@@ -29,6 +30,15 @@ export async function api<T = any>(method: string, url: string, body?: unknown):
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
   });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!res.ok) throw new ApiError(res.status, data?.error ?? 'ERROR', data?.detail ?? '');
+  return data as T;
+}
+
+/** Sube un archivo tal cual (binario) en el cuerpo de la petición. */
+export async function upload<T = any>(url: string, file: File): Promise<T> {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: file, credentials: 'same-origin' });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) throw new ApiError(res.status, data?.error ?? 'ERROR', data?.detail ?? '');

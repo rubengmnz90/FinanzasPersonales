@@ -61,8 +61,9 @@ async function importCategories(ws: Sheet, c: Ctx) {
       c.skip('Grupos', r, `grupo inválido "${group}"`);
       continue;
     }
+    const had = await c.tx.query('SELECT 1 FROM categories WHERE user_id=$1 AND name=$2', [c.userId, name]);
     await ensureCategory(c.tx, c.userId, name, group as GroupName);
-    c.inc('categorías');
+    if (!had.rowCount) c.inc('categorías'); // solo cuenta las nuevas
   }
 }
 
@@ -374,12 +375,13 @@ async function importComo(ws: Sheet, c: Ctx) {
     const idx = num(ws, 9, col);
     const label = text(ws, 8, col);
     if (!idx || !label) continue;
-    await c.tx.query(
+    const cobro = await c.tx.query(
       `INSERT INTO recovery_cobros(user_id,cobro_index,label,income) VALUES ($1,$2,$3,$4)
-       ON CONFLICT (user_id,cobro_index) DO UPDATE SET label=EXCLUDED.label, income=EXCLUDED.income`,
+       ON CONFLICT (user_id,cobro_index) DO UPDATE SET label=EXCLUDED.label, income=EXCLUDED.income
+       RETURNING (xmax = 0) AS inserted`,
       [c.userId, idx, label, Math.round(num(ws, 10, col))],
     );
-    c.inc('cobros de recuperación');
+    if (cobro.rows[0]?.inserted) c.inc('cobros de recuperación'); // solo cuenta los nuevos
   }
   for (let r = 13; r <= lastRow(ws); r++) {
     const concept = text(ws, r, 2);

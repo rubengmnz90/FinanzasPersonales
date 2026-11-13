@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Banknote, BarChart3, CalendarRange, CreditCard, HandCoins, History, KeyRound, Landmark, PiggyBank, LogOut, Monitor, Moon, Plug, ReceiptText, Sun, Wallet } from 'lucide-react';
+import { Banknote, BarChart3, CalendarRange, CreditCard, FileSpreadsheet, HandCoins, History, KeyRound, Landmark, PiggyBank, LogOut, Monitor, Moon, Plug, ReceiptText, Sun, Wallet } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { ApiError, get, post } from './api';
@@ -9,6 +9,7 @@ import { AccountsPage } from '../features/accounts/AccountsPage';
 import { CardsPage, SavingsPage } from '../features/savings/CardsSavingsPage';
 import { DebtsPage } from '../features/loans/DebtsPage';
 import { HistoryPage } from '../features/history/HistoryPage';
+import { ImportPage } from '../features/import/ImportPage';
 import { AuthorizePage } from '../features/connect/AuthorizePage';
 import { ConnectPage } from '../features/connect/ConnectPage';
 import { FlowPage } from '../features/flow/FlowPage';
@@ -29,6 +30,7 @@ const NAV = [
   ['/distribucion', 'Distribución', ReceiptText],
   ['/resumenes', 'Resúmenes', BarChart3],
   ['/historial', 'Historial', History],
+  ['/importar', 'Importar Excel', FileSpreadsheet],
   ['/conectar', 'Conectar IA', Plug],
 ] as const;
 
@@ -135,6 +137,7 @@ export function App() {
                     <Route path="/ahorro" element={<SavingsPage />} />
                     <Route path="/deudas" element={<DebtsPage />} />
                     <Route path="/historial" element={<HistoryPage />} />
+                    <Route path="/importar" element={<ImportPage />} />
                     <Route path="/prestamos" element={<LoansPage />} />
                     <Route path="/recuperacion" element={<Navigate to="/flujo" replace />} />
                     <Route path="/distribucion" element={<SplitsPage />} />

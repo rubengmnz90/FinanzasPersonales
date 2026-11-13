@@ -1,5 +1,10 @@
 import { listAudit, revertAction } from '../modules/audit/service';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
+import { auditCtx } from '../db/context';
+import { importWorkbook } from '../import/importer';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import {
@@ -75,6 +80,41 @@ const Amt = z.union([z.string(), z.number()]);
 const uid = (req: any): string => req.user.id;
 
 export function registerApiRoutes(app: FastifyInstance, db: Db): void {
+  // ── importar el Excel: el archivo llega en el cuerpo, se lee desde un temporal y se BORRA siempre al terminar ──
+  const MAX_XLSX = 20 * 1024 * 1024;
+  app.addContentTypeParser(
+    ['application/octet-stream', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+    { parseAs: 'buffer', bodyLimit: MAX_XLSX },
+    (_req, body, done) => done(null, body),
+  );
+  app.post('/api/import', { bodyLimit: MAX_XLSX }, async (req, reply) => {
+    const { dryRun } = z.object({ dryRun: z.enum(['0', '1']).optional() }).parse(req.query);
+    const buf = req.body as unknown;
+    // Un .xlsx es un ZIP: empieza con "PK\x03\x04".
+    if (!Buffer.isBuffer(buf) || buf.length < 4 || buf.readUInt32BE(0) !== 0x504b0304) {
+      return reply.code(400).send({ error: 'ARCHIVO_INVALIDO', detail: 'Sube un archivo Excel (.xlsx)' });
+    }
+    const dir = await mkdtemp(join(tmpdir(), 'import-'));
+    const file = join(dir, 'libro.xlsx');
+    let report: Awaited<ReturnType<typeof importWorkbook>> | null = null;
+    let failure: unknown = null;
+    try {
+      await writeFile(file, buf, { mode: 0o600 });
+      const userId = uid(req);
+      report = await auditCtx.run({ actor: 'importación', userId }, () => importWorkbook(db, userId, file, { dryRun: dryRun === '1' }));
+    } catch (e) {
+      failure = e;
+    } finally {
+      // El borrado termina ANTES de responder: el archivo no queda en el servidor pase lo que pase.
+      await rm(dir, { recursive: true, force: true });
+    }
+    if (report) return report;
+    const name = (failure as any)?.name;
+    if (name === 'NotFoundError' || name === 'ValidationError') throw failure;
+    console.error('[import]', failure);
+    return reply.code(400).send({ error: 'ARCHIVO_INVALIDO', detail: 'No pude leer ese Excel. Usa el archivo "Administracion 2026.xlsx".' });
+  });
+
   // ── categorías ──
   app.get('/api/categories', async (req) => listCategories(db, uid(req)));
   app.post('/api/categories', async (req) => {

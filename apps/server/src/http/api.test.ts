@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { makeTestDb, type TestCtx } from '../test/helpers';
@@ -128,4 +130,52 @@ describe('API de datos', () => {
     expect(again.statusCode).toBe(400);
     expect(again.json().error).toBe('YEAR_EXISTS');
   });
+});
+
+describe('importar Excel desde la app', () => {
+  const xlsx = process.env.EXCEL_FILE ?? 'C:/Users/Ruben/Downloads/Administracion 2026.xlsx';
+  const up = (cookie: string, body: Buffer | string, dry: boolean) =>
+    app.inject({ method: 'POST', url: `/api/import?dryRun=${dry ? 1 : 0}`, headers: { cookie, 'content-type': 'application/octet-stream' }, payload: body });
+  const tmpDirs = () => readdirSync(tmpdir()).filter((d) => d.startsWith('import-'));
+
+  it('exige sesión y rechaza lo que no es un .xlsx, sin dejar temporales', async () => {
+    const before = tmpDirs().length;
+    expect((await app.inject({ method: 'POST', url: '/api/import', headers: { 'content-type': 'application/octet-stream' }, payload: 'x' })).statusCode).toBe(401);
+    const { cookie } = await login('otro@test.io', 'otra-clave-1', '10.0.1.1');
+    const bad = await up(cookie, 'esto no es un excel', true);
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toBe('ARCHIVO_INVALIDO');
+    // un ZIP válido pero que no es el libro esperado tampoco deja rastro
+    const fake = await up(cookie, Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('basura')]), true);
+    expect(fake.statusCode).toBe(400);
+    expect(tmpDirs().length).toBe(before);
+  });
+
+  it.skipIf(!existsSync(xlsx))('simula sin guardar, importa, y repetir no duplica; el temporal se borra', async () => {
+    const before = tmpDirs().length;
+    const { cookie } = await login('otro@test.io', 'otra-clave-1', '10.0.1.2');
+    const file = readFileSync(xlsx);
+    const count = async () => (await ctx.db.query('SELECT count(*)::int AS n FROM transactions t JOIN users u ON u.id=t.user_id WHERE u.email=$1', ['otro@test.io'])).rows[0].n as number;
+
+    const dry = await up(cookie, file, true);
+    expect(dry.statusCode).toBe(200);
+    expect(dry.json().reconciliation.every((r: any) => r.ok)).toBe(true);
+    expect(await count()).toBe(0);
+
+    const real = await up(cookie, file, false);
+    expect(real.statusCode).toBe(200);
+    const n = await count();
+    expect(n).toBeGreaterThan(100);
+
+    const again = await up(cookie, file, false);
+    expect(again.statusCode).toBe(200);
+    expect(await count()).toBe(n);
+    expect(tmpDirs().length).toBe(before);
+
+    // quedó en el historial como "importación" y se puede deshacer entera
+    const audit = await app.inject({ method: 'GET', url: '/api/audit?limit=5', headers: { cookie } });
+    const act = audit.json().actions.find((a: any) => a.actor === 'importación' && a.total > 100);
+    expect(act).toBeTruthy();
+    expect(act.entries.length).toBeLessThanOrEqual(30);
+  }, 120_000);
 });

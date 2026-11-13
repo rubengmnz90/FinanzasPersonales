@@ -39,6 +39,8 @@ export interface AuditEntry {
 }
 export interface AuditAction {
   txId: number;
+  /** Cantidad real de cambios de la acción (entries puede traer solo los primeros). */
+  total: number;
   at: string;
   actor: string;
   reverted: boolean;
@@ -84,7 +86,10 @@ export async function listAudit(
   // Se piden filas de sobra y se agrupan por acción; la última acción puede quedar cortada, por eso se descarta.
   const filter = opts.actor === 'ia' ? "AND actor LIKE 'ia%'" : opts.actor === 'web' ? "AND actor = 'web'" : opts.actor === 'otros' ? "AND actor NOT LIKE 'ia%' AND actor <> 'web'" : '';
   const rows = (await db.query(
-    `SELECT * FROM audit_log WHERE user_id=$1 AND ($2::bigint IS NULL OR seq < $2) ${filter} ORDER BY seq DESC LIMIT $3`,
+    `SELECT * FROM (
+       SELECT *, COUNT(*) OVER (PARTITION BY tx_id) AS n, MIN(seq) OVER (PARTITION BY tx_id) AS tx_min
+       FROM audit_log WHERE user_id=$1 AND ($2::bigint IS NULL OR seq < $2) ${filter}) t
+     ORDER BY seq DESC LIMIT $3`,
     [userId, opts.beforeSeq ?? null, limit * 6],
   )).rows;
   const hasMore = rows.length === limit * 6;
@@ -94,11 +99,13 @@ export async function listAudit(
   if (hasMore && list.length > 1) list = list.slice(0, -1); // la última puede estar incompleta
   list = list.slice(0, limit);
   const actions = list.map((g): AuditAction => {
-    const entries = g.map(toEntry);
+    const total = Number(g[0].n);
+    const entries = g.slice(0, 30).map(toEntry);
     const first = entries[0];
-    const more = entries.length > 1 ? ` (+${entries.length - 1} más)` : '';
+    const more = total > 1 ? ` (+${total - 1} más)` : '';
     return {
       txId: g[0].tx_id,
+      total,
       at: g[0].at instanceof Date ? g[0].at.toISOString() : g[0].at,
       actor: g[0].actor,
       reverted: g.every((r) => r.reverted_at),
@@ -106,7 +113,7 @@ export async function listAudit(
       entries,
     };
   });
-  const lastSeq = list.length ? Math.min(...list[list.length - 1].map((r) => Number(r.seq))) : null;
+  const lastSeq = list.length ? Number(list[list.length - 1][0].tx_min) : null;
   return { actions, nextBefore: hasMore && lastSeq !== null ? lastSeq : null };
 }
 

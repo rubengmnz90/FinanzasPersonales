@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 
 const EMAIL = 'e2e@test.io';
@@ -264,6 +265,24 @@ test.describe.serial('app', () => {
     const accs = await (await page.request.get('/api/accounts')).json();
     const gnb = accs.find((a: any) => a.name === 'Tarjeta GNB');
     expect(gnb.balance).toBe(6902460);
+  });
+
+  test('importar Excel desde la app: simulación, conciliación y confirmar', async ({ page }) => {
+    const xlsx = process.env.EXCEL_FILE ?? 'C:/Users/Ruben/Downloads/Administracion 2026.xlsx';
+    test.skip(!existsSync(xlsx), 'No hay Excel local para probar');
+    await login(page, NEW_PASS);
+    await page.getByRole('link', { name: /Importar Excel/ }).click();
+    await expect(page.getByRole('heading', { name: 'Importar Excel', exact: true })).toBeVisible();
+    await page.getByLabel('Archivo Excel').setInputFiles(xlsx);
+    const res = page.getByRole('region', { name: 'Resultado de la importación' });
+    await expect(res).toContainText('Simulación: todavía no se guardó nada');
+    await expect(res.getByLabel('Conciliación')).toContainText('OK');
+    await expect(res.getByLabel('Conciliación')).toContainText('Vibra Lejana: saldo');
+    await page.screenshot({ path: 'test-results/page-ImportarSimulacion.png', fullPage: true });
+    await res.getByRole('button', { name: 'Importar ahora' }).click();
+    await expect(res).toContainText('Importado');
+    await expect(res).toContainText('No hay nada nuevo'); // ya estaba cargado por el setup: repetir no duplica
+    await page.screenshot({ path: 'test-results/page-ImportarListo.png', fullPage: true });
   });
 
   test('préstamos con cuotas: Coomecipar y Vibra Lejana, marcar pagada y nuevo préstamo en la proyección', async ({ page }) => {

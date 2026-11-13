@@ -8,7 +8,7 @@ import { useToast } from '../../components/ui';
 
 interface Change { column: string; before: unknown; after: unknown }
 interface Entry { id: string; table: string; tableLabel: string; op: 'INSERT' | 'UPDATE' | 'DELETE'; label: string; changes: Change[] }
-interface Action { txId: number; at: string; actor: string; reverted: boolean; summary: string; entries: Entry[] }
+interface Action { txId: number; total: number; at: string; actor: string; reverted: boolean; summary: string; entries: Entry[] }
 interface Page { actions: Action[]; nextBefore: number | null }
 
 const OP = {
@@ -109,6 +109,7 @@ export function HistoryPage() {
 
               {expanded && (
                 <ul className="mt-4 flex flex-col gap-2 border-t pt-4 text-sm">
+                  {a.total > a.entries.length && <li className="text-xs text-muted-foreground">Mostrando {a.entries.length} de {a.total} cambios.</li>}
                   {a.entries.map((e) => (
                     <li key={e.id} className="rounded-lg bg-muted/50 p-3">
                       <div><b className={OP[e.op].tone}>{OP[e.op].label}</b> {e.tableLabel.toLowerCase()}{e.label ? `: ${e.label}` : ''}</div>
