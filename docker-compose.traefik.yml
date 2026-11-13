@@ -1,0 +1,71 @@
+# Despliegue detrás de Traefik (HTTPS lo maneja Traefik; la app y la base no publican puertos).
+# Lo usa deploy.sh:  docker compose -p finanzas -f docker-compose.traefik.yml up -d --build
+# Variables (se leen del .env que genera deploy.sh): DOMAIN_URL, PUBLIC_URL, POSTGRES_PASSWORD, SEED_*,
+# TRAEFIK_NETWORK / TRAEFIK_ENTRYPOINT_HTTP / TRAEFIK_ENTRYPOINT_HTTPS / TRAEFIK_CERTRESOLVER.
+
+networks:
+  proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK:-proxy}
+  finanzas-network:
+
+volumes:
+  pgdata:
+
+services:
+  finanzas_db:
+    image: postgres:16
+    container_name: finanzas_production_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Falta POSTGRES_PASSWORD en .env}
+      POSTGRES_DB: finanzas
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d finanzas"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - finanzas-network
+
+  finanzas_app:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    container_name: finanzas_production_app
+    restart: always
+    depends_on:
+      finanzas_db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@finanzas_db:5432/finanzas
+      SEED_EMAIL: ${SEED_EMAIL:-}
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-}
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-false}
+      PUBLIC_URL: ${PUBLIC_URL:?Falta PUBLIC_URL en .env}
+      PORT: "3000"
+    networks:
+      - proxy
+      - finanzas-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK:-proxy}"
+      - "traefik.http.services.finanzas.loadbalancer.server.port=3000"
+
+      # --- MIDDLEWARE: HTTP -> HTTPS ---
+      - "traefik.http.middlewares.finanzas-https-redirect.redirectscheme.scheme=https"
+
+      # --- ROUTER HTTP (puerto 80) ---
+      - "traefik.http.routers.finanzas-main.entrypoints=${TRAEFIK_ENTRYPOINT_HTTP:-http}"
+      - "traefik.http.routers.finanzas-main.rule=Host(`${DOMAIN_URL:?Falta DOMAIN_URL en .env}`)"
+      - "traefik.http.routers.finanzas-main.middlewares=finanzas-https-redirect"
+
+      # --- ROUTER HTTPS (puerto 443) ---
+      - "traefik.http.routers.finanzas-main-secure.entrypoints=${TRAEFIK_ENTRYPOINT_HTTPS:-https}"
+      - "traefik.http.routers.finanzas-main-secure.rule=Host(`${DOMAIN_URL}`)"
+      - "traefik.http.routers.finanzas-main-secure.tls=true"
+      - "traefik.http.routers.finanzas-main-secure.tls.certresolver=${TRAEFIK_CERTRESOLVER:-production}"
+      - "traefik.http.routers.finanzas-main-secure.service=finanzas"

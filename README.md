@@ -17,7 +17,28 @@ pnpm -F server start        # http://localhost:3000
 
 Tests: `pnpm test` (necesita `TEST_DATABASE_URL`); E2E: `cd apps/web && npx playwright test` (usa la base `finanzas_test`, instala Chrome del sistema).
 
-## Despliegue en tu servidor (Docker)
+## Despliegue con Traefik (script)
+
+Para un servidor Linux con Docker y **Traefik** ya funcionando (red externa `proxy`, entrypoints `http`/`https`, resolvedor `production`; los nombres se ajustan en el `.env`):
+
+```
+mkdir -p ~/projects/finanzas && cd ~/projects/finanzas
+curl -fsSLO https://raw.githubusercontent.com/rubengmnz90/FinanzasPersonales/main/deploy.sh   # repo privado: copia el archivo con scp
+chmod +x deploy.sh
+./deploy.sh
+```
+
+El script clona el repo (si es privado: `export GITHUB_TOKEN=...` con permiso de lectura, o `REPO_URL=git@github.com:...` con una deploy key), genera el `.env` con claves aleatorias (pide dominio y correo; por defecto `finanzas.vibralejana.com`), verifica la red de Traefik y el DNS, construye, levanta (`docker-compose.traefik.yml`: app + Postgres, sin publicar puertos), espera al healthcheck y prueba el HTTPS. Al terminar muestra la clave inicial **una sola vez**; la app te obliga a cambiarla al entrar.
+
+Es idempotente: volver a correrlo actualiza el código y reconstruye sin tocar el `.env` ni los datos.
+
+```
+./deploy.sh status | logs [finanzas_app|finanzas_db] | backup | import-excel archivo.xlsx | help
+```
+
+DNS en Namecheap: registro **A**, Host `finanzas`, valor = IP pública del servidor.
+
+## Alternativa: Docker Compose simple (sin Traefik)
 
 Requisitos: un servidor con Docker y el plugin Compose.
 
