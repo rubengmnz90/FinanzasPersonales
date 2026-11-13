@@ -1,0 +1,5 @@
+# Proxy HTTPS con certificado automático (Let's Encrypt). El dominio viene de DOMAIN (.env).
+{$DOMAIN:finanzas.vibralejana.com} {
+	encode gzip
+	reverse_proxy app:3000
+}

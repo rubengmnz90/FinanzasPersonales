@@ -33,7 +33,20 @@ docker compose up -d --build
 - `GET /healthz` responde `{"ok":true}` cuando la app y la base funcionan; Docker lo usa como healthcheck (`docker compose ps` muestra `healthy`).
 - Datos persistentes en el volumen `pgdata`. No lo borres con `docker compose down -v`.
 
-### HTTPS y dominio
+### Dominio: finanzas.vibralejana.com
+
+1. **DNS:** en el panel donde administras `vibralejana.com` crea un registro **A** con nombre `finanzas` apuntando a la IP pública de tu servidor (si el servidor tiene IPv6, agrega también el **AAAA**). Si el dominio usa Cloudflare, déjalo en "solo DNS" (nube gris) mientras se emite el certificado.
+2. **Puertos:** abre el 80 y el 443 del servidor (el 80 lo necesita Let's Encrypt para emitir el certificado).
+3. **`.env`:** `PUBLIC_URL=https://finanzas.vibralejana.com` y `DOMAIN=finanzas.vibralejana.com`.
+4. Levanta con el perfil HTTPS (incluye Caddy, que obtiene y renueva el certificado solo):
+   ```
+   docker compose --profile https up -d --build
+   ```
+5. Entra a https://finanzas.vibralejana.com. La IA se conecta por MCP a `https://finanzas.vibralejana.com/mcp`.
+
+Cuando el dominio ya funciona, conviene cerrar el puerto 3000 hacia afuera (firewall) para que solo se entre por HTTPS. Si tu servidor ya tiene su propio proxy (nginx, Traefik…), no uses el perfil `https`: apunta tu proxy a `localhost:3000` y mantén `PUBLIC_URL=https://finanzas.vibralejana.com`.
+
+### HTTPS y dominio (otro proxy)
 
 Publica la app detrás de un proxy con HTTPS y pon `PUBLIC_URL=https://tu-dominio` en `.env` (activa cookies `secure` y es la URL que usa la IA por MCP). Ejemplo con Caddy (certificado automático):
 

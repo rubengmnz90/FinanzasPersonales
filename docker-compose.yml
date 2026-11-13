@@ -32,5 +32,24 @@ services:
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
       PORT: "3000"
 
+  # HTTPS con dominio propio:  docker compose --profile https up -d --build
+  caddy:
+    image: caddy:2
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-finanzas.vibralejana.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:
