@@ -212,6 +212,27 @@ test.describe.serial('app', () => {
     await expect(goals.getByRole('listitem').filter({ hasText: 'Moto' })).toContainText('Intocable');
   });
 
+  test('ahorro: pestañas de objetivos, depósitos, movimientos y préstamos cargan con datos reales', async ({ page }) => {
+    await login(page, NEW_PASS);
+    await page.getByRole('link', { name: /^Ahorro/ }).click();
+    await page.getByRole('tab', { name: 'Depósitos' }).click();
+    await expect(page.getByRole('table', { name: 'Depósitos del ahorro' })).toContainText('Aguinaldo');
+    await page.getByRole('tab', { name: 'Movimientos' }).click();
+    const all = page.getByRole('table', { name: 'Movimientos del ahorro' });
+    await expect(all).toContainText('Reponer Osky');
+    // más nuevo arriba
+    await expect(all.getByRole('row').nth(1)).toContainText(/Super Emma|Reponer amor salida|Aguinaldo|Vacaciones|Super/);
+    await page.getByRole('tab', { name: 'Préstamos' }).click();
+    await expect(page.getByRole('table', { name: 'Detalle de préstamos y devoluciones' })).toContainText('Reponer Osky');
+    await expect(page.getByLabel('Préstamos por persona')).toContainText('Osky');
+    await expect(page.getByText('Cargando…')).toHaveCount(0);
+    // relatorio de un objetivo
+    await page.getByRole('tab', { name: 'Objetivos' }).click();
+    await page.getByRole('button', { name: 'Ver movimientos de Vacaciones' }).click();
+    await expect(page.getByRole('table', { name: 'Relatorio de Vacaciones' })).toContainText('Vacaciones');
+    await page.screenshot({ path: 'test-results/page-AhorroTabs.png', fullPage: true });
+  });
+
   test('tarjetas: cargar una compra usa cupo y sube la deuda', async ({ page }) => {
     await login(page, NEW_PASS);
     await page.getByRole('link', { name: /^Tarjetas/ }).click();
@@ -233,7 +254,12 @@ test.describe.serial('app', () => {
     await login(page, NEW_PASS);
     await page.getByRole('link', { name: /^Ahorro/ }).click();
     const region = page.getByRole('region', { name: 'Me deben de mi ahorro' });
-    await expect(region).toContainText('Nadie te debe');
+    // Los retiros del Excel se reparten por persona (Osky, Charlie, Amor); el resto son "Préstamos normales".
+    await expect(region).toContainText('Préstamos normales');
+    await expect(region).toContainText('Osky');
+    await expect(region).toContainText('250.000');
+    await expect(region).toContainText('Charlie');
+    await expect(region).toContainText('35.000');
     await region.getByRole('button', { name: 'Nueva persona' }).click();
     await page.getByRole('dialog').getByLabel('Nombre').fill('Charlie');
     await page.getByRole('dialog').getByRole('button', { name: /^(Crear|Guardar)$/ }).click();
@@ -377,25 +403,19 @@ test.describe.serial('app', () => {
     await page.getByRole('link', { name: /^Ahorro/ }).click();
     await expect(page.getByLabel('Saldo de Ahorro Coomecipar')).toContainText('4.494.460');
     await expect(page.getByLabel('Objetivos de Ahorro Coomecipar')).toContainText('Vacaciones');
-    // préstamo del ahorro a GNB
+    // préstamo normal del ahorro (directo, sin pasar por el banco)
     await page.getByRole('button', { name: 'Prestar', exact: true }).click();
     const d2 = page.getByRole('dialog');
     await d2.getByLabel('Monto').fill('300.000');
-    await d2.getByRole('combobox', { name: 'Objetivo del ahorro' }).click();
-    await page.getByRole('option', { name: /Vacaciones/ }).click();
-    await expect(page.locator('[cmdk-list]')).toHaveCount(0);
-    await d2.getByLabel('Confirmo usar un objetivo intocable').check();
-    await d2.getByRole('button', { name: 'Registrar' }).click();
+    await d2.getByLabel('Concepto').fill('Prestamo e2e');
+    await d2.getByRole('button', { name: 'Guardar' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.locator('.kpi', { hasText: 'Prestado del ahorro' })).toContainText('3.372.555'); // 3.072.555 del Excel + 300.000
     // devolución parcial
     await page.getByRole('button', { name: 'Devolver', exact: true }).click();
     const d3 = page.getByRole('dialog');
     await d3.getByLabel('Monto').fill('100.000');
-    await d3.getByRole('combobox', { name: 'Objetivo del ahorro' }).click();
-    await page.getByRole('option', { name: /Vacaciones/ }).click();
-    await expect(page.locator('[cmdk-list]')).toHaveCount(0);
-    await d3.getByRole('button', { name: 'Registrar' }).click();
+    await d3.getByRole('button', { name: 'Guardar' }).click();
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(page.locator('.kpi', { hasText: 'Prestado del ahorro' })).toContainText('3.272.555');
   });

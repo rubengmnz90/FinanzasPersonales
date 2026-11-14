@@ -243,11 +243,21 @@ async function importOtrosGastos(ws: Sheet, c: Ctx) {
 
 // ───────────────────────────── Cuentas ─────────────────────────────
 
+/** A quién se le prestó, según el concepto del Excel ("Reponer Osky", "Reponer amor salida"...). Sin nombre conocido = préstamo normal. */
+export function personFromConcept(concept: string): string | null {
+  const c = concept.toLowerCase();
+  if (c.includes('osky')) return 'Osky';
+  if (c.includes('charlie')) return 'Charlie';
+  if (c.includes('amor')) return 'Amor';
+  return null;
+}
+
 async function entry(c: Ctx, accId: string, d: string, concept: string, amount: number, key: string, tag: string | null = null, bucket: string | null = null) {
+  const person = tag === 'temp_withdrawal' || tag === 'return' ? personFromConcept(concept) : null;
   const r = await c.tx.query(
-    `INSERT INTO ledger_entries(account_id,date,concept,amount,tag,bucket,import_key) VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `INSERT INTO ledger_entries(account_id,date,concept,amount,tag,bucket,person,import_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      ON CONFLICT (account_id,import_key) DO NOTHING`,
-    [accId, d, concept, Math.round(amount), tag, bucket, key],
+    [accId, d, concept, Math.round(amount), tag, bucket, person, key],
   );
   if (r.rowCount) c.inc('movimientos de cuentas');
 }

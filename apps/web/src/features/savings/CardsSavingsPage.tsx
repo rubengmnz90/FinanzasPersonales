@@ -14,7 +14,8 @@ import { Bar, Kpi, Money, money, today, useToast } from '../../components/ui';
 import { AccountForm, Empty, StatementView } from '../accounts/AccountsPage';
 import { TransferDialog, type TransferMode } from '../accounts/TransferDialog';
 import { LedgerView, type LedgerLabels } from '../loans/LedgerView';
-import { PersonCard, SavingsMovements } from './SavingsMovements';
+import { AllMovesView, DepositsView, LoansView, NO_BUCKET, ObjectiveMoves, PersonCard, useSavingsOverview } from './SavingsMovements';
+import { SavingsActionDialog, type SavingsAction } from './SavingsActionDialog';
 import type { SavingsMove, SavingsOverview, SavingsPerson } from '../../app/types';
 
 const ALL_KEYS = ['accounts', 'statement', 'ledger', 'savings-overview', 'buckets', 'transactions', 'health'];
@@ -112,9 +113,7 @@ export function SavingsPage() {
       </div>
       {savings.map((a) => (
         <SavingsPanel key={a.accountId} a={a} onChanged={k.refresh} onEdit={() => k.setEditing(a)}
-          onSave={() => k.openTransfer({ mode: 'saving' })}
-          onLoan={() => k.openTransfer({ mode: 'loan', from: a.accountId })}
-          onRepay={() => k.openTransfer({ mode: 'repay' })} />
+          onSave={() => k.openTransfer({ mode: 'saving' })} />
       ))}
       {!savings.length && <Empty>Crea una cuenta de ahorro para empezar.</Empty>}
       <DebtorsSection debtors={debtors} owing={owing} moves={overview.data?.moves ?? []} hasSavings={savings.length > 0}
@@ -293,10 +292,14 @@ function DebtorsSection({ debtors, owing, moves, hasSavings, onAdd, onLend, onCo
 }
 
 // ── Ahorro ──
-function SavingsPanel({ a, onChanged, onEdit, onSave, onLoan, onRepay }: {
-  a: Balance; onChanged: () => unknown; onEdit: () => void; onSave: () => void; onLoan: () => void; onRepay: () => void;
+function SavingsPanel({ a, onChanged, onEdit, onSave }: {
+  a: Balance; onChanged: () => unknown; onEdit: () => void; onSave: () => void;
 }) {
   const toast = useToast();
+  const ov = useSavingsOverview(a.accountId);
+  const [action, setAction] = useState<SavingsAction | null>(null);
+  const [openBucket, setOpenBucket] = useState<string | null>(null);
+  const peopleNames = (ov.data?.people ?? []).map((p) => p.person).filter((x): x is string => !!x);
   const defs = useQuery({ queryKey: ['buckets'], queryFn: () => get<SavingsBucket[]>('/api/buckets') });
   const [newName, setNewName] = useState('');
   const [assign, setAssign] = useState('');
@@ -324,9 +327,11 @@ function SavingsPanel({ a, onChanged, onEdit, onSave, onLoan, onRepay }: {
           <p className="text-sm text-muted-foreground">{[a.institution, a.alias ? `alias ${a.alias}` : null].filter(Boolean).join(' · ') || 'Cuenta de ahorro'}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={onSave}>Pasar a ahorro</Button>
-          <Button variant="outline" onClick={onLoan}>Prestar</Button>
-          <Button variant="outline" onClick={onRepay}>Devolver</Button>
+          <Button onClick={() => setAction('deposit')}>Depositar</Button>
+          <Button variant="outline" onClick={() => setAction('withdrawal')}>Extraer</Button>
+          <Button variant="outline" onClick={() => setAction('loan')}>Prestar</Button>
+          <Button variant="outline" onClick={() => setAction('return')}>Devolver</Button>
+          <Button variant="ghost" onClick={onSave} title="Mover plata de tu banco al ahorro">Desde mi banco</Button>
           <Button variant="ghost" onClick={onEdit}><Pencil /> Editar</Button>
         </div>
       </div>
@@ -341,9 +346,11 @@ function SavingsPanel({ a, onChanged, onEdit, onSave, onLoan, onRepay }: {
       <Tabs defaultValue="objetivos" className="mt-8">
         <TabsList>
           <TabsTrigger value="objetivos">Objetivos</TabsTrigger>
+          <TabsTrigger value="dep">Depósitos</TabsTrigger>
           <TabsTrigger value="mov">Movimientos</TabsTrigger>
-          <TabsTrigger value="edit">Agregar o editar</TabsTrigger>
+          <TabsTrigger value="prest">Préstamos</TabsTrigger>
           <TabsTrigger value="rel">Relatorio</TabsTrigger>
+          <TabsTrigger value="edit">Editar</TabsTrigger>
         </TabsList>
 
         <TabsContent value="objetivos" className="!mt-6 flex flex-col gap-5">
@@ -363,9 +370,14 @@ function SavingsPanel({ a, onChanged, onEdit, onSave, onLoan, onRepay }: {
                 </div>
                 <div className="num mb-3 mt-3 text-xl font-semibold">{money(r.balance)}</div>
                 <Bar pct={(Math.abs(r.balance) / max) * 100} />
+                <Button size="sm" variant={openBucket === r.name ? 'default' : 'outline'} className="mt-3" aria-label={`Ver movimientos de ${r.name}`} onClick={() => setOpenBucket(openBucket === r.name ? null : r.name)}>
+                  {openBucket === r.name ? 'Ocultar movimientos' : 'Ver movimientos'}
+                </Button>
               </li>
             ))}
           </ul>
+
+          {openBucket && <ObjectiveMoves accountId={a.accountId} bucket={openBucket} onClose={() => setOpenBucket(null)} />}
 
           <form className="flex flex-wrap items-center gap-3" onSubmit={addBucket} aria-label="Nuevo objetivo">
             <Input className="w-72" placeholder="Nuevo objetivo (p. ej. Moto)" value={newName} onChange={(e) => setNewName(e.target.value)} aria-label="Nombre del objetivo" />
@@ -385,8 +397,14 @@ function SavingsPanel({ a, onChanged, onEdit, onSave, onLoan, onRepay }: {
           )}
         </TabsContent>
 
+        <TabsContent value="dep" className="!mt-6">
+          <DepositsView accountId={a.accountId} />
+        </TabsContent>
         <TabsContent value="mov" className="!mt-6">
-          <SavingsMovements accountId={a.accountId} />
+          <AllMovesView accountId={a.accountId} />
+        </TabsContent>
+        <TabsContent value="prest" className="!mt-6">
+          <LoansView accountId={a.accountId} />
         </TabsContent>
         <TabsContent value="edit" className="!mt-6">
           <LedgerView accountId={a.accountId} labels={SAVINGS_LABELS} showBucket onChanged={onChanged} onError={toast.error} />
@@ -395,6 +413,7 @@ function SavingsPanel({ a, onChanged, onEdit, onSave, onLoan, onRepay }: {
           <StatementView accounts={[a]} accountId={a.accountId} onAccount={() => undefined} asOf={today()} />
         </TabsContent>
       </Tabs>
+      <SavingsActionDialog accountId={a.accountId} action={action} onClose={() => setAction(null)} onDone={onChanged} buckets={names.filter((n) => n !== NO_BUCKET)} people={peopleNames} />
     </section>
   );
 }

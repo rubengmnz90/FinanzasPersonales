@@ -327,7 +327,7 @@ function QuickAdd({
               ariaLabel="Quién pagó"
               value={payer}
               onChange={setPayer}
-              options={payers.map((p) => ({ value: p, label: p }))}
+              options={[...new Set([...payers, payer].filter(Boolean))].map((p) => ({ value: p, label: p }))}
               placeholder="Tellma, CBG…"
               searchPlaceholder="Escribe para buscar o crear…"
               allowClear
