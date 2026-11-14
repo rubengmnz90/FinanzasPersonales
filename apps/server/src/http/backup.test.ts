@@ -58,3 +58,56 @@ describe('respaldo descargable', () => {
     expect(d.columnas.sort()).toEqual(['ledger_entries.person', 'transactions.payer']);
   });
 });
+
+describe('respaldo completo (zip del dump)', () => {
+  const OLD = { t: process.env.BACKUP_TOKEN, a: process.env.ADMIN_EMAIL };
+  const TOKEN = 'token-de-prueba-0123456789abcdef';
+  async function full(dump: () => Promise<Buffer>) {
+    const a = await buildApp(ctx.db, { allowSignup: false, dump });
+    return a;
+  }
+  afterAll(() => {
+    process.env.BACKUP_TOKEN = OLD.t; process.env.ADMIN_EMAIL = OLD.a;
+    if (OLD.t === undefined) delete process.env.BACKUP_TOKEN;
+    if (OLD.a === undefined) delete process.env.ADMIN_EMAIL;
+  });
+
+  it('con el token devuelve un zip con el SQL; sin token o con uno malo, 401', async () => {
+    process.env.BACKUP_TOKEN = TOKEN;
+    const a = await full(async () => Buffer.from('-- dump falso\nSELECT 1;\n'));
+    const ok = await a.inject({ method: 'GET', url: '/api/backup/full', headers: { authorization: `Bearer ${TOKEN}` } });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.headers['content-type']).toContain('application/zip');
+    expect(ok.headers['content-disposition']).toMatch(/finanzas-\d{8}-\d{6}\.zip/);
+    const { unzipSync, strFromU8 } = await import('fflate');
+    const files = unzipSync(new Uint8Array(ok.rawPayload));
+    const names = Object.keys(files);
+    expect(names).toHaveLength(1);
+    expect(strFromU8(files[names[0]])).toContain('SELECT 1;');
+    expect((await a.inject({ method: 'GET', url: '/api/backup/full', headers: { authorization: 'Bearer otro' } })).statusCode).toBe(401);
+    expect((await a.inject({ method: 'GET', url: '/api/backup/full' })).statusCode).toBe(401);
+    await a.close();
+  });
+
+  it('sin BACKUP_TOKEN configurado, ningún Bearer sirve', async () => {
+    delete process.env.BACKUP_TOKEN;
+    const a = await full(async () => Buffer.from('x'));
+    expect((await a.inject({ method: 'GET', url: '/api/backup/full', headers: { authorization: 'Bearer ' } })).statusCode).toBe(401);
+    expect((await a.inject({ method: 'GET', url: '/api/backup/full', headers: { authorization: 'Bearer undefined' } })).statusCode).toBe(401);
+    await a.close();
+  });
+
+  it('por sesión: solo el administrador; otro usuario recibe 403', async () => {
+    delete process.env.BACKUP_TOKEN;
+    process.env.ADMIN_EMAIL = 'a@test.io';
+    const a = await full(async () => Buffer.from('-- ok'));
+    const login2 = async (email: string) => {
+      const r = await a.inject({ method: 'POST', url: '/api/auth/login', payload: { email, password: 'clave-12345' } });
+      const raw = r.headers['set-cookie'];
+      return (Array.isArray(raw) ? raw : [String(raw)]).map((c) => c.split(';')[0]).find((c) => c.startsWith('sid='))!;
+    };
+    expect((await a.inject({ method: 'GET', url: '/api/backup/full', headers: { cookie: await login2('a@test.io') } })).statusCode).toBe(200);
+    expect((await a.inject({ method: 'GET', url: '/api/backup/full', headers: { cookie: await login2('b@test.io') } })).statusCode).toBe(403);
+    await a.close();
+  });
+});

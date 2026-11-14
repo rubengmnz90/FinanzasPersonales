@@ -12,6 +12,7 @@ const app = await buildApp(db, {
   allowSignup: process.env.ALLOW_SIGNUP === 'true',
   secureCookies: publicUrl.startsWith('https://'),
   publicUrl,
+  databaseUrl: process.env.DATABASE_URL!,
   extend: (a, d) => registerMcp(a, d, publicUrl),
 });
 

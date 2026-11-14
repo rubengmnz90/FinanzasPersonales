@@ -95,6 +95,16 @@ docker compose exec app ./node_modules/.bin/tsx src/import/cli.ts --file /tmp/ad
 - Cambia `POSTGRES_PASSWORD` y `SEED_USER_PASSWORD` (no dejes `12345`) y no subas `.env`.
 - Mantén `ALLOW_SIGNUP=false`.
 - Respaldo: en la app, menú **Respaldo > Descargar respaldo** (JSON con tus datos). También `./deploy.sh backup` hace un `pg_dump` manual en `./backups` del servidor.
+- **Respaldo completo (dump real) por API**: `GET /api/backup/full` devuelve un `.zip` con el `pg_dump` de toda la base (el servidor no guarda copias). Se autoriza con `Authorization: Bearer <BACKUP_TOKEN>` (variable del `.env`; `deploy.sh` la genera y puedes verla con `grep BACKUP_TOKEN .env`) o con la sesión del administrador (`ADMIN_EMAIL`, por defecto `SEED_EMAIL`), y desde la app con **Respaldo > Descargar dump completo**. Requiere `pg_dump` en la imagen (el `Dockerfile` instala el cliente v16, misma versión que `postgres:16`; si cambias la base, cambia `PG_CLIENT_VERSION`). Tras actualizar hay que reconstruir la imagen (`./deploy.sh`).
+- **Rutina en tu PC**: `tools/backup-local.mjs` (Node 18+, sin dependencias) baja el zip a una carpeta y conserva los últimos `KEEP`:
+  ```
+  set FINANZAS_URL=https://finanzas.vibralejana.com
+  set FINANZAS_BACKUP_TOKEN=<token>
+  set BACKUP_DIR=D:\Respaldosinanzas
+  node tools/backup-local.mjs
+  ```
+  Programarlo en Windows: `schtasks /Create /SC DAILY /ST 03:00 /TN FinanzasBackup /TR "cmd /c cd /d D:\Proyectos\FinanzasPersonales && node toolsackup-local.mjs"` (con las variables definidas a nivel de usuario). En Linux: una línea de `cron` equivalente.
+- **Restaurar**: descomprime y ejecuta `psql "$DATABASE_URL" -f finanzas-AAAAMMDD-HHMMSS.sql` (el dump trae `DROP ... IF EXISTS`, así que sustituye lo existente). **Seguridad**: el zip contiene todo (hashes de contraseña, sesiones, tokens, datos de todos los usuarios) y no está cifrado; trata el token y los archivos como secretos.
 - Todo cambio queda en **Historial** (con deshacer), incluidos los de la IA.
 
 ## Conectar una IA (MCP)

@@ -20,6 +20,7 @@ import {
 } from '../auth/sessions';
 import { seedCategories } from '../modules/categories/service';
 import { registerApiRoutes } from './routes';
+import { DumpError, runPgDump, safeEqual, stamp, zipDump } from '../modules/backup/dump';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -31,6 +32,10 @@ export interface AppOptions {
   allowSignup?: boolean;
   secureCookies?: boolean;
   publicUrl?: string;
+  /** Conexión a la base, para el dump completo (pg_dump). */
+  databaseUrl?: string;
+  /** Reemplaza pg_dump (pruebas). */
+  dump?: () => Promise<Buffer>;
   /** Hook para registrar rutas extra (OAuth + MCP). */
   extend?: (app: FastifyInstance, db: Db) => Promise<void> | void;
 }
@@ -109,6 +114,44 @@ export async function buildApp(db: Db, opts: AppOptions = {}): Promise<FastifyIn
   });
 
   app.get('/api/me', { preHandler: authenticate }, async (req) => req.user);
+
+  // ── respaldo completo (pg_dump en .zip) ──
+  // Acceso: el token BACKUP_TOKEN (Authorization: Bearer ...) para servicios externos, o la sesión del administrador
+  // (ADMIN_EMAIL, por defecto SEED_EMAIL). Es una copia de TODA la base, por eso no se abre a cualquier usuario.
+  const backupLimiter = new RateLimiter(10, 60_000);
+  app.get('/api/backup/full', async (req, reply) => {
+    const adminEmail = (process.env.ADMIN_EMAIL || process.env.SEED_EMAIL || '').trim().toLowerCase();
+    const token = process.env.BACKUP_TOKEN?.trim() ?? '';
+    const bearer = /^Bearer (.+)$/i.exec(String(req.headers.authorization ?? ''))?.[1];
+    let allowed = false;
+    if (bearer) {
+      if (!backupLimiter.check(req.ip)) return reply.code(429).send({ error: 'TOO_MANY_ATTEMPTS' });
+      allowed = token.length >= 20 && safeEqual(bearer, token);
+      if (!allowed) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
+    } else {
+      const u = await getSessionUser(db, req.cookies[COOKIE]);
+      if (!u) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
+      if (!adminEmail || u.email.toLowerCase() !== adminEmail) {
+        return reply.code(403).send({ error: 'FORBIDDEN', detail: 'El respaldo completo es solo para el administrador' });
+      }
+    }
+    try {
+      const sql = await (opts.dump ? opts.dump() : runPgDump(opts.databaseUrl ?? process.env.DATABASE_URL ?? ''));
+      const base = `finanzas-${stamp()}`;
+      const zip = zipDump(sql, `${base}.sql`);
+      return reply
+        .header('content-type', 'application/zip')
+        .header('content-disposition', `attachment; filename="${base}.zip"`)
+        .header('cache-control', 'no-store')
+        .send(zip);
+    } catch (e) {
+      if (e instanceof DumpError) {
+        console.error('[backup]', e.message);
+        return reply.code(e.code === 'PG_DUMP_MISSING' ? 501 : 500).send({ error: e.code, detail: e.message });
+      }
+      throw e;
+    }
+  });
 
   // Estado de la base: qué migraciones corrieron y si existen las columnas nuevas (para diagnosticar tras actualizar).
   app.get('/api/diagnostico', { preHandler: authenticate }, async () => {

@@ -11,6 +11,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:?Define DATABASE_URL}
       SEED_EMAIL: ${SEED_EMAIL:-rubengmnz90@gmail.com}
       SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-}
+      BACKUP_TOKEN: ${BACKUP_TOKEN:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-false}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
       PORT: "3000"

@@ -89,6 +89,12 @@ ensure_env() {
   local f="$ROOT/.env"
   if [ -f "$f" ]; then
     log ".env existente: se conserva (no se pisa)"
+    if ! grep -q '^BACKUP_TOKEN=' "$f"; then
+      printf '
+BACKUP_TOKEN=%s
+' "$(openssl rand -hex 32)" >> "$f"
+      log "Se agregó BACKUP_TOKEN a .env (para el respaldo completo por API; léelo con: grep BACKUP_TOKEN .env)"
+    fi
   else
     log "Creando .env (permisos 600)"
     local domain email seedpw dbpw
@@ -112,6 +118,8 @@ TRAEFIK_ENTRYPOINT_HTTP=http
 TRAEFIK_ENTRYPOINT_HTTPS=https
 TRAEFIK_CERTRESOLVER=production
 EOF
+    printf 'BACKUP_TOKEN=%s
+' "$(openssl rand -hex 32)" >> "$f"
     chmod 600 "$f"
     NEW_ENV=1
     GENERATED_SEED_PW="$seedpw"
