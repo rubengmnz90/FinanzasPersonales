@@ -55,7 +55,7 @@ export function createMcpServer(ctx: McpCtx): McpServer {
           if (e instanceof InvalidAmountError) return fail('Monto inválido: usa un entero o una expresión aritmética simple.');
           if (e instanceof ValidationError) return fail(`${e.code}${e.detail ? ': ' + e.detail : ''}`);
           console.error('[mcp]', e);
-          return fail('Error interno');
+          return fail(`Error interno: ${String((e as Error)?.message ?? e).slice(0, 300)}`);
         }
       }) as any,
     );

@@ -49,7 +49,8 @@ export async function buildApp(db: Db, opts: AppOptions = {}): Promise<FastifyIn
     if (err?.code === '23505') return reply.code(409).send({ error: 'DUPLICATE', detail: 'Ya existe un registro igual' });
     if (err?.statusCode && err.statusCode < 500) return reply.code(err.statusCode).send({ error: err.code ?? 'ERROR', detail: err.message });
     console.error(err);
-    return reply.code(500).send({ error: 'INTERNAL' });
+    // Quien usa la API ya inició sesión (es su propia base): se devuelve el motivo para poder diagnosticar sin entrar al servidor.
+    return reply.code(500).send({ error: 'INTERNAL', detail: String(err?.message ?? err).slice(0, 300) });
   });
 
   const limiter = new RateLimiter(Number(process.env.LOGIN_RATE_LIMIT) || 10, 60_000);
@@ -108,6 +109,16 @@ export async function buildApp(db: Db, opts: AppOptions = {}): Promise<FastifyIn
   });
 
   app.get('/api/me', { preHandler: authenticate }, async (req) => req.user);
+
+  // Estado de la base: qué migraciones corrieron y si existen las columnas nuevas (para diagnosticar tras actualizar).
+  app.get('/api/diagnostico', { preHandler: authenticate }, async () => {
+    const mig = await db.query('SELECT name FROM schema_migrations ORDER BY name');
+    const cols = await db.query(
+      `SELECT table_name || '.' || column_name AS c FROM information_schema.columns
+       WHERE (table_name='ledger_entries' AND column_name='person') OR (table_name='transactions' AND column_name='payer')`,
+    );
+    return { migraciones: mig.rows.map((r: any) => r.name), columnas: cols.rows.map((r: any) => r.c) };
+  });
 
   app.post('/api/auth/change-password', { preHandler: authenticate }, async (req, reply) => {
     const { currentPassword, newPassword } = req.body as { currentPassword?: string; newPassword?: string };

@@ -49,4 +49,12 @@ describe('respaldo descargable', () => {
     const anon = await app.inject({ method: 'GET', url: '/api/backup' });
     expect(anon.statusCode).toBe(401);
   });
+
+  it('el diagnóstico confirma migraciones y columnas nuevas', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/diagnostico', headers: { cookie: await login('a@test.io') } });
+    expect(res.statusCode).toBe(200);
+    const d = res.json();
+    expect(d.migraciones).toEqual(expect.arrayContaining(['007_entry_person.sql', '008_transaction_payer.sql']));
+    expect(d.columnas.sort()).toEqual(['ledger_entries.person', 'transactions.payer']);
+  });
 });
