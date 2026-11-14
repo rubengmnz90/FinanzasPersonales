@@ -1,3 +1,4 @@
+import { exportUserData } from '../modules/backup/service';
 import { listAudit, revertAction } from '../modules/audit/service';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -149,6 +150,15 @@ export function registerApiRoutes(app: FastifyInstance, db: Db): void {
   app.patch('/api/transactions/:id', async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return updateTransaction(db, uid(req), id, txBody.partial().parse(req.body));
+  });
+  app.get('/api/backup', async (req, reply) => {
+    const data = await exportUserData(db, uid(req), req.user!.email);
+    const name = `finanzas-respaldo-${new Date().toISOString().slice(0, 10)}.json`;
+    return reply
+      .header('content-type', 'application/json; charset=utf-8')
+      .header('content-disposition', `attachment; filename="${name}"`)
+      .header('cache-control', 'no-store')
+      .send(JSON.stringify(data));
   });
   app.get('/api/payers', async (req) => listPayers(db, uid(req)));
   app.get('/api/transactions/:id', async (req) => getTransaction(db, uid(req), (req.params as any).id));

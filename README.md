@@ -94,7 +94,7 @@ docker compose exec app ./node_modules/.bin/tsx src/import/cli.ts --file /tmp/ad
 
 - Cambia `POSTGRES_PASSWORD` y `SEED_USER_PASSWORD` (no dejes `12345`) y no subas `.env`.
 - Mantén `ALLOW_SIGNUP=false`.
-- Programa el respaldo de `pg_dump` (cron) y guárdalo fuera del servidor.
+- Respaldo: en la app, menú **Respaldo > Descargar respaldo** (JSON con tus datos). También `./deploy.sh backup` hace un `pg_dump` manual en `./backups` del servidor.
 - Todo cambio queda en **Historial** (con deshacer), incluidos los de la IA.
 
 ## Conectar una IA (MCP)

@@ -180,8 +180,7 @@ cmd_deploy() {
     echo "  Guárdala ahora: después de cambiarla puedes borrar SEED_USER_PASSWORD de $ROOT/.env"
   fi
   echo
-  echo "  Respaldo diario (cron, 3:30 am):"
-  echo "    (crontab -l 2>/dev/null; echo \"30 3 * * * cd $ROOT && ./deploy.sh backup >> backups/backup.log 2>&1\") | crontab -"
+  echo "  Respaldo: desde la app, menú Respaldo > Descargar respaldo."
   echo "  Conectar la IA (MCP): https://$DOMAIN_URL/mcp"
 }
 

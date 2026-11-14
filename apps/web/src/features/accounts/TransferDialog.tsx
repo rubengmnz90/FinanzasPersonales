@@ -53,7 +53,7 @@ export function TransferDialog({
   const [useLocked, setUseLocked] = useState(false);
   const buckets = useQuery({ queryKey: ['buckets'], queryFn: () => get<SavingsBucket[]>('/api/buckets'), enabled: open });
 
-  const live = useMemo(() => accounts.filter((a) => !a.archived && a.type !== 'debt'), [accounts]);
+  const live = useMemo(() => accounts.filter((a) => !a.archived), [accounts]);
   const defaultBank = live.find((a) => a.isDefault)?.accountId ?? live.find((a) => a.type === 'bank')?.accountId ?? '';
 
   useEffect(() => {

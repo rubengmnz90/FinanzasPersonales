@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Banknote, BarChart3, CalendarRange, CreditCard, FileSpreadsheet, HandCoins, History, KeyRound, Landmark, PiggyBank, LogOut, Monitor, Moon, Plug, ReceiptText, Sun, Wallet } from 'lucide-react';
+import { Banknote, BarChart3, DatabaseBackup, CalendarRange, CreditCard, FileSpreadsheet, HandCoins, History, KeyRound, Landmark, PiggyBank, LogOut, Monitor, Moon, Plug, ReceiptText, Sun, Wallet } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { ApiError, get, post } from './api';
@@ -11,6 +11,7 @@ import { DebtsPage } from '../features/loans/DebtsPage';
 import { HistoryPage } from '../features/history/HistoryPage';
 import { ImportPage } from '../features/import/ImportPage';
 import { AuthorizePage } from '../features/connect/AuthorizePage';
+import { BackupPage } from '../features/backup/BackupPage';
 import { ConnectPage } from '../features/connect/ConnectPage';
 import { FlowPage } from '../features/flow/FlowPage';
 import { LoansPage } from '../features/loans/LoansPage';
@@ -31,6 +32,7 @@ const NAV = [
   ['/resumenes', 'Resúmenes', BarChart3],
   ['/historial', 'Historial', History],
   ['/importar', 'Importar Excel', FileSpreadsheet],
+  ['/respaldo', 'Respaldo', DatabaseBackup],
   ['/conectar', 'Conectar IA', Plug],
 ] as const;
 
@@ -142,6 +144,7 @@ export function App() {
                     <Route path="/recuperacion" element={<Navigate to="/flujo" replace />} />
                     <Route path="/distribucion" element={<SplitsPage />} />
                     <Route path="/resumenes" element={<SummaryPage />} />
+                    <Route path="/respaldo" element={<BackupPage />} />
                     <Route path="/conectar" element={<ConnectPage />} />
                     <Route path="/authorize" element={<AuthorizePage />} />
                     <Route path="/cambiar-clave" element={<ChangePasswordPage />} />

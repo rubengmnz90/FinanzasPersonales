@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { HandCoins, Plus } from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
+import { HandCoins, Plus, Wallet } from 'lucide-react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { get, post } from '../../app/api';
 import type { Balance } from '../../app/types';
 import { Button } from '../../components/ui/button';
@@ -9,6 +9,10 @@ import { Input } from '../../components/ui/input';
 import { Field } from '../../components/ui/label';
 import { Kpi, Money, money, useToast } from '../../components/ui';
 import { cn } from '../../lib/utils';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs';
+import { StatementView } from '../accounts/AccountsPage';
+import { TransferDialog } from '../accounts/TransferDialog';
+import { today } from '../../components/ui';
 import { DEBT_LABELS, LedgerView } from './LedgerView';
 
 const NO_LENDER = 'Sin indicar';
@@ -21,6 +25,10 @@ export function DebtsPage() {
   const debts = (balances.data ?? []).filter((a) => a.type === 'debt' && !a.archived);
   const [sel, setSel] = useState('');
   const [creating, setCreating] = useState(false);
+  const [paying, setPaying] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
+  const selected = debts.find((d) => d.accountId === sel);
+  const pick = (id: string) => { setSel(id); setTimeout(() => panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); };
 
   useEffect(() => {
     if (!sel && debts.length) setSel(debts[0].accountId);
@@ -63,7 +71,7 @@ export function DebtsPage() {
               <button
                 key={a.accountId}
                 type="button"
-                onClick={() => setSel(a.accountId)}
+                onClick={() => pick(a.accountId)}
                 aria-pressed={sel === a.accountId}
                 className={cn('rounded-2xl border bg-card p-5 text-left shadow-sm transition-all hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring', sel === a.accountId && 'border-primary ring-2 ring-primary/30')}
               >
@@ -79,11 +87,33 @@ export function DebtsPage() {
       ))}
       {!debts.length && !balances.isLoading && <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">Sin deudas cargadas. Crea una con “Nueva deuda”.</div>}
 
-      {sel && debts.some((d) => d.accountId === sel) && (
-        <section className="rounded-2xl border bg-card p-6 shadow-sm" aria-label="Historial de la deuda">
-          <LedgerView key={sel} accountId={sel} labels={DEBT_LABELS} onChanged={() => qc.invalidateQueries({ queryKey: ['accounts'] })} onError={toast.error} />
+      {selected && (
+        <section ref={panelRef} className="rounded-2xl border bg-card p-6 shadow-sm" aria-label="Historial de la deuda">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="!mb-1 text-lg">{selected.name}</h2>
+              <p className="text-sm text-muted-foreground">
+                {selected.counterparty ? `Le debo a ${selected.counterparty} · ` : ''}
+                {selected.balance > 0 ? <>saldo a tu favor <b className="pos">{money(selected.balance)}</b></> : <>debes <b className="neg">{money(selected.owed)}</b></>}
+              </p>
+            </div>
+            <Button onClick={() => setPaying(true)}><Wallet /> Pagar esta deuda</Button>
+          </div>
+          <Tabs defaultValue="rel" className="mt-6" key={selected.accountId}>
+            <TabsList>
+              <TabsTrigger value="rel">Movimientos y pagos</TabsTrigger>
+              <TabsTrigger value="edit">Agregar o editar cargos</TabsTrigger>
+            </TabsList>
+            <TabsContent value="rel" className="!mt-5">
+              <StatementView accounts={[selected]} accountId={selected.accountId} onAccount={() => undefined} asOf={today()} />
+            </TabsContent>
+            <TabsContent value="edit" className="!mt-5">
+              <LedgerView accountId={selected.accountId} labels={DEBT_LABELS} onChanged={() => qc.invalidateQueries({ queryKey: ['accounts'] })} onError={toast.error} />
+            </TabsContent>
+          </Tabs>
         </section>
       )}
+      <TransferDialog open={paying} onOpenChange={setPaying} accounts={balances.data ?? []} initialMode="transfer" initialTo={selected?.accountId} />
 
       <NewDebt open={creating} onOpenChange={setCreating} lenders={[...groups.keys()].filter((w) => w !== NO_LENDER)} onDone={(id) => { setSel(id); qc.invalidateQueries({ queryKey: ['accounts'] }); }} />
     </div>
