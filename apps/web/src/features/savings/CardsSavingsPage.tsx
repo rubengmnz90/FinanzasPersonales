@@ -14,8 +14,9 @@ import { Bar, Kpi, Money, money, today, useToast } from '../../components/ui';
 import { AccountForm, Empty, StatementView } from '../accounts/AccountsPage';
 import { TransferDialog, type TransferMode } from '../accounts/TransferDialog';
 import { LedgerView, type LedgerLabels } from '../loans/LedgerView';
+import { SavingsMovements } from './SavingsMovements';
 
-const ALL_KEYS = ['accounts', 'statement', 'ledger', 'buckets', 'transactions', 'health'];
+const ALL_KEYS = ['accounts', 'statement', 'ledger', 'savings-overview', 'buckets', 'transactions', 'health'];
 const CARD_LABELS: LedgerLabels = { plus: 'Pago o abono (libera cupo)', minus: 'Compra o cargo (usa cupo)', grid: 'Movimientos de la tarjeta' };
 const SAVINGS_LABELS: LedgerLabels = { plus: 'Aporte (suma)', minus: 'Retiro (resta)', grid: 'Aportes del ahorro' };
 
@@ -332,6 +333,7 @@ function SavingsPanel({ a, onChanged, onEdit, onSave, onLoan, onRepay }: {
         <TabsList>
           <TabsTrigger value="objetivos">Objetivos</TabsTrigger>
           <TabsTrigger value="mov">Movimientos</TabsTrigger>
+          <TabsTrigger value="edit">Agregar o editar</TabsTrigger>
           <TabsTrigger value="rel">Relatorio</TabsTrigger>
         </TabsList>
 
@@ -375,6 +377,9 @@ function SavingsPanel({ a, onChanged, onEdit, onSave, onLoan, onRepay }: {
         </TabsContent>
 
         <TabsContent value="mov" className="!mt-6">
+          <SavingsMovements accountId={a.accountId} />
+        </TabsContent>
+        <TabsContent value="edit" className="!mt-6">
           <LedgerView accountId={a.accountId} labels={SAVINGS_LABELS} showBucket onChanged={onChanged} onError={toast.error} />
         </TabsContent>
         <TabsContent value="rel" className="!mt-6">

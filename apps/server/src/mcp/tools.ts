@@ -6,7 +6,7 @@ import { categoryIdByName, listCategories } from '../modules/categories/service'
 import { createTransaction, deleteTransaction, listTransactions, updateTransaction } from '../modules/transactions/service';
 import { createPlannedExpense, listPlannedExpenses, markDone } from '../modules/planned-expenses/service';
 import { comparePlans, getPlanView, listPlans } from '../modules/plans/service';
-import { accountIdByName, accountStatement, addEntry, getAccount, listBalances, savingsWithdrawals } from '../modules/ledgers/service';
+import { accountIdByName, accountStatement, addEntry, getAccount, listBalances, savingsOverview } from '../modules/ledgers/service';
 import { createTransfer, deleteTransfer, listBuckets, saveBucket } from '../modules/transfers/service';
 import { listAudit, revertAction } from '../modules/audit/service';
 import { auditCtx } from '../db/context';
@@ -84,8 +84,8 @@ export function createMcpServer(ctx: McpCtx): McpServer {
   tool(
     'add_transaction',
     'finanzas:write',
-    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta. Si `account` es una tarjeta se anota como uso (egreso) o pago (ingreso) de la tarjeta. Si `account` es un ahorro (p. ej. Ahorro Coomecipar) se anota en la cuenta: un ingreso sin `bucket` es la devolución de un retiro temporal; con `bucket` es un aporte a ese objetivo; un egreso es un retiro temporal.',
-    { date: D.optional().describe('Por defecto hoy'), item: z.string().min(1), kind: z.enum(['income', 'expense']), amount: Amt, category: z.string().optional().describe('Nombre exacto de la categoría'), account: z.string().optional().describe('Nombre de la cuenta (list_accounts)'), bucket: z.string().optional().describe('Solo ahorros: objetivo del aporte (Ahorro, Vacaciones...)'), note: z.string().optional() },
+    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta. Si `account` es una tarjeta se anota como uso (egreso) o pago (ingreso) de la tarjeta. Si `account` es un ahorro (p. ej. Ahorro Coomecipar) se anota en la cuenta: un ingreso sin `bucket` es la devolución de un retiro temporal; con `bucket` es un aporte a ese objetivo; un egreso es un préstamo del ahorro (hay que devolverlo; indica `person`), salvo `extraction: true`, que es sacar tu ahorro.',
+    { date: D.optional().describe('Por defecto hoy'), item: z.string().min(1), kind: z.enum(['income', 'expense']), amount: Amt, category: z.string().optional().describe('Nombre exacto de la categoría'), account: z.string().optional().describe('Nombre de la cuenta (list_accounts)'), payer: z.string().optional().describe('Solo ingresos: quién pagó (Tellma, CBG...)'), bucket: z.string().optional().describe('Solo ahorros: objetivo del aporte o de la extracción (Ahorro, Vacaciones...)'), person: z.string().optional().describe('Solo ahorros: a quién se le prestó o quién devolvió (Osky, Charlie, Amor, Devolver en cobro...). Sin persona = préstamo normal'), extraction: z.boolean().optional().describe('Solo ahorros, egreso: true = sacaste tu ahorro (meta cumplida); no es préstamo ni hay que devolverlo'), note: z.string().optional() },
     async (a) => {
       if (a.account) {
         const sid = await accountIdByName(db, userId, a.account);
@@ -100,9 +100,10 @@ export function createMcpServer(ctx: McpCtx): McpServer {
         if (sid && accType === 'savings') {
           const date = a.date ?? new Date().toISOString().slice(0, 10);
           const value = Math.abs(parseAmount(a.amount));
-          const tag = a.kind === 'expense' ? 'temp_withdrawal' : a.bucket ? null : 'return';
-          const id = await addEntry(db, userId, sid, { date, concept: a.item, rawAmount: a.kind === 'income' ? value : -value, tag, bucket: a.bucket ?? null });
-          return { id, account: a.account, date, concept: a.item, kind: a.kind, tag, bucket: a.bucket ?? null };
+          const tag = a.kind === 'expense' ? (a.extraction ? null : 'temp_withdrawal') : a.bucket ? null : 'return';
+          const person = tag ? a.person ?? null : null;
+          const id = await addEntry(db, userId, sid, { date, concept: a.item, rawAmount: a.kind === 'income' ? value : -value, tag, bucket: a.bucket ?? null, person });
+          return { id, account: a.account, date, concept: a.item, kind: a.kind, tag, bucket: a.bucket ?? null, person };
         }
       }
       const categoryId = a.category ? await categoryIdByName(db, userId, a.category) : null;
@@ -117,19 +118,20 @@ export function createMcpServer(ctx: McpCtx): McpServer {
         rawAmount: a.amount,
         categoryId,
         note: a.note ?? null,
+        payer: a.payer ?? null,
       });
     },
   );
 
   tool(
-    'savings_withdrawals',
+    'savings_overview',
     'finanzas:read',
-    'Detalle de lo retirado del ahorro (por concepto, ej. "Reponer Osky") y lo ya devuelto, con el pendiente.',
+    'Ahorro por tipo (depósitos, extracciones, préstamos, devoluciones) y lo que debe cada persona (Osky, Charlie, Amor, Devolver en cobro; sin persona = préstamos normales).',
     { account: z.string().optional().describe('Por defecto Ahorro Coomecipar') },
     async (a) => {
       const id = await accountIdByName(db, userId, a.account ?? 'Ahorro Coomecipar');
       if (!id) throw new NotFoundError(`cuenta "${a.account ?? 'Ahorro Coomecipar'}" (usa list_accounts)`);
-      return savingsWithdrawals(db, userId, id);
+      return savingsOverview(db, userId, id);
     },
   );
 
@@ -137,13 +139,13 @@ export function createMcpServer(ctx: McpCtx): McpServer {
     'update_transaction',
     'finanzas:write',
     'Edita un movimiento del flujo (id de list_transactions). Solo se cambian los campos indicados.',
-    { id: z.string().uuid(), date: D.optional(), item: z.string().optional(), kind: z.enum(['income', 'expense']).optional(), amount: Amt.optional(), category: z.string().optional(), account: z.string().optional(), note: z.string().optional() },
+    { id: z.string().uuid(), date: D.optional(), item: z.string().optional(), kind: z.enum(['income', 'expense']).optional(), amount: Amt.optional(), category: z.string().optional(), account: z.string().optional(), payer: z.string().optional(), note: z.string().optional() },
     async (a) => {
       const categoryId = a.category ? await categoryIdByName(db, userId, a.category) : undefined;
       if (a.category && !categoryId) throw new NotFoundError(`categoría "${a.category}"`);
       const accountId = a.account ? await accountIdByName(db, userId, a.account) : undefined;
       if (a.account && !accountId) throw new NotFoundError(`cuenta "${a.account}"`);
-      return updateTransaction(db, userId, a.id, { date: a.date, item: a.item, kind: a.kind, rawAmount: a.amount, categoryId, accountId, note: a.note });
+      return updateTransaction(db, userId, a.id, { date: a.date, item: a.item, kind: a.kind, rawAmount: a.amount, categoryId, accountId, payer: a.payer, note: a.note });
     },
   );
   tool('delete_transaction', 'finanzas:write', 'Elimina un movimiento del flujo. Úsalo solo si el usuario lo pidió.', { id: z.string().uuid() }, async (a) => {

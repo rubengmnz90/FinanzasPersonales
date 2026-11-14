@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { makeTestDb, makeUser, type TestCtx } from '../test/helpers';
 import { NotFoundError } from '../db/client';
-import { addEntry, createAccount, getLedger, listBalances, pendingTempWithdrawals, savingsWithdrawals } from './ledgers/service';
+import { addEntry, createAccount, getLedger, listBalances, pendingTempWithdrawals, savingsOverview } from './ledgers/service';
 import { addAllocation, getRecovery, setCobro } from './recovery/service';
 import { addSplitItem, createSplit, getSplit } from './splits/service';
 import { createTransaction } from './transactions/service';
@@ -48,10 +48,25 @@ describe('ledgers', () => {
     await addEntry(ctx.db, a, s.id, { date: '2026-09-05', concept: 'Reponer Osky', rawAmount: -250000, tag: 'temp_withdrawal' });
     await addEntry(ctx.db, a, s.id, { date: '2026-09-20', concept: 'Devolución', rawAmount: 100000, tag: 'return' });
     expect(await pendingTempWithdrawals(ctx.db, a, s.id)).toBe(150000);
-    const w = await savingsWithdrawals(ctx.db, a, s.id);
-    expect(w.withdrawals.map((x) => [x.concept, x.amount])).toEqual([['Reponer Osky', 250000]]);
-    expect(w.totalReturned).toBe(100000);
-    expect(w.pending).toBe(150000);
+    const w = await savingsOverview(ctx.db, a, s.id);
+    expect(w.totals.pending).toBe(150000);
+    expect(w.people).toEqual([{ person: null, lent: 250000, returned: 100000, pending: 150000 }]);
+  });
+
+  it('ahorro: separa depósitos, extracciones, préstamos y devoluciones por persona', async () => {
+    const u = await makeUser(ctx.db);
+    const s = await createAccount(ctx.db, u, { type: 'savings', name: 'Ahorro 2' });
+    await addEntry(ctx.db, u, s.id, { date: '2026-01-01', concept: 'Ahorro', rawAmount: 500000, bucket: 'Ahorro' });
+    await addEntry(ctx.db, u, s.id, { date: '2026-02-01', concept: 'Compré moto', rawAmount: -100000, bucket: 'Ahorro' });
+    await addEntry(ctx.db, u, s.id, { date: '2026-03-01', concept: 'Reponer Charlie', rawAmount: -35000, tag: 'temp_withdrawal', person: 'Charlie' });
+    await addEntry(ctx.db, u, s.id, { date: '2026-03-02', concept: 'Super', rawAmount: -312233, tag: 'temp_withdrawal', person: 'Devolver en cobro' });
+    await addEntry(ctx.db, u, s.id, { date: '2026-03-03', concept: 'Traje', rawAmount: -2274, tag: 'temp_withdrawal' });
+    await addEntry(ctx.db, u, s.id, { date: '2026-03-04', concept: 'Pagó Charlie', rawAmount: 15000, tag: 'return', person: 'Charlie' });
+    const o = await savingsOverview(ctx.db, u, s.id);
+    expect(o.moves.map((m) => m.kind)).toEqual(['deposit', 'withdrawal', 'loan', 'loan', 'loan', 'return']);
+    expect(o.totals).toMatchObject({ deposits: 500000, withdrawals: 100000, lent: 349507, returned: 15000, pending: 334507 });
+    expect(o.people.map((p) => [p.person, p.pending])).toEqual([['Devolver en cobro', 312233], ['Charlie', 20000], [null, 2274]]);
+    expect(o.moves.at(-1)!.balance).toBe(500000 - 100000 - 35000 - 312233 - 2274 + 15000);
   });
 
   it('aísla usuarios', async () => {

@@ -169,8 +169,8 @@ describe('herramientas MCP', () => {
     const back = await call(c, 'add_transaction', { account: savings, kind: 'income', item: 'Devolución Amor', amount: 91000, date: '2026-11-13' });
     expect(back.isError).toBe(false);
     expect(back.json.tag).toBe('return');
-    const w = await call(c, 'savings_withdrawals', { account: savings });
-    expect(w.json.pending).toBe(0);
+    const w = await call(c, 'savings_overview', { account: savings });
+    expect(w.json.totals.pending).toBe(0);
     await ctx.db.query(
       `INSERT INTO accounts(user_id,type,name,credit_limit) SELECT id,'card','Tarjeta Test',1000000 FROM users WHERE email='a@test.io' ON CONFLICT DO NOTHING`,
     );

@@ -3,7 +3,7 @@ export interface Category { id: string; name: string; groupName: string; archive
 export type AccountType = 'bank' | 'cash' | 'savings' | 'card' | 'cash_box' | 'fund' | 'debt' | 'receivable';
 export interface Tx {
   id: string; rowType: 'tx' | 'transfer'; date: string; item: string; kind: 'income' | 'expense' | 'transfer'; amount: number; amountExpr: string | null;
-  categoryId: string | null; categoryName: string | null; groupName: string | null; note: string | null;
+  categoryId: string | null; categoryName: string | null; groupName: string | null; note: string | null; payer: string | null;
   accountId: string | null; accountName: string | null; toAccountId: string | null; toAccountName: string | null;
   bucket: string | null; transferKind: 'transfer' | 'loan' | 'repayment' | null; balance: number;
 }
@@ -39,7 +39,7 @@ export interface SplitView {
   shareErrors: { itemId: string; sum: number }[];
 }
 export interface RangeSummary { from: string; to: string; groups: { group: string; total: number; categories: { name: string; total: number }[] }[]; income: number; expense: number; net: number }
-export interface LedgerEntry { id: string; date: string; concept: string; amount: number; tag: string | null; bucket: string | null; balance: number }
+export interface LedgerEntry { id: string; date: string; concept: string; amount: number; tag: string | null; bucket: string | null; person: string | null; balance: number }
 export interface Ledger { account: { id: string; type: string; name: string; creditLimit: number | null; counterparty: string | null }; entries: LedgerEntry[]; balance: number; owed: number }
 export interface SavingsBucket { name: string; untouchable: boolean }
 export interface Installment { id: string; number: number; dueDate: string; amount: number; paid: boolean; paidDate: string | null }
@@ -48,3 +48,8 @@ export interface Loan {
   payAccountId: string | null; ledgerAccountId: string | null; note: string | null; installments: Installment[];
   paidCount: number; paidTotal: number; pendingCount: number; pendingTotal: number; nextDue: string | null;
 }
+
+export type SavingsMoveKind = 'deposit' | 'withdrawal' | 'loan' | 'return';
+export interface SavingsMove { key: string; source: 'entry' | 'transfer'; id: string; date: string; kind: SavingsMoveKind; concept: string; amount: number; bucket: string | null; person: string | null; balance: number }
+export interface SavingsPerson { person: string | null; lent: number; returned: number; pending: number }
+export interface SavingsOverview { moves: SavingsMove[]; people: SavingsPerson[]; totals: { deposits: number; withdrawals: number; lent: number; returned: number; pending: number } }

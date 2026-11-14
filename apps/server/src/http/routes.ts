@@ -16,6 +16,7 @@ import {
   deleteTransaction,
   getTransaction,
   balanceAt,
+  listPayers,
   listTransactions,
   updateTransaction,
 } from '../modules/transactions/service';
@@ -44,6 +45,7 @@ import {
 import {
   accountStatement,
   addEntry,
+  savingsOverview,
   assignBucket,
   createAccount,
   deleteEntry,
@@ -130,6 +132,7 @@ export function registerApiRoutes(app: FastifyInstance, db: Db): void {
     rawAmount: Amt,
     categoryId: z.string().uuid().nullable().optional(),
     note: z.string().nullable().optional(),
+    payer: z.string().nullable().optional(),
     accountId: z.string().uuid().nullable().optional(),
   });
   app.get('/api/transactions', async (req) => {
@@ -147,6 +150,7 @@ export function registerApiRoutes(app: FastifyInstance, db: Db): void {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return updateTransaction(db, uid(req), id, txBody.partial().parse(req.body));
   });
+  app.get('/api/payers', async (req) => listPayers(db, uid(req)));
   app.get('/api/transactions/:id', async (req) => getTransaction(db, uid(req), (req.params as any).id));
   app.delete('/api/transactions/:id', async (req) => {
     await deleteTransaction(db, uid(req), (req.params as any).id);
@@ -270,6 +274,7 @@ export function registerApiRoutes(app: FastifyInstance, db: Db): void {
     }).partial().parse(req.body);
     return updateAccount(db, uid(req), (req.params as any).id, b);
   });
+  app.get('/api/accounts/:id/savings-overview', async (req) => savingsOverview(db, uid(req), (req.params as any).id));
   app.get('/api/accounts/:id/statement', async (req) => {
     const q = z.object({ from: D.optional(), to: D.optional() }).parse(req.query);
     return accountStatement(db, uid(req), (req.params as any).id, q);
@@ -333,11 +338,11 @@ export function registerApiRoutes(app: FastifyInstance, db: Db): void {
     return getLedger(db, uid(req), (req.params as any).id, q);
   });
   app.post('/api/accounts/:id/entries', async (req, reply) => {
-    const b = z.object({ date: D, concept: z.string(), rawAmount: Amt, tag: z.string().nullable().optional(), bucket: z.string().nullable().optional() }).parse(req.body);
+    const b = z.object({ date: D, concept: z.string(), rawAmount: Amt, tag: z.string().nullable().optional(), bucket: z.string().nullable().optional(), person: z.string().nullable().optional() }).parse(req.body);
     return reply.code(201).send({ id: await addEntry(db, uid(req), (req.params as any).id, b) });
   });
   app.patch('/api/entries/:id', async (req) => {
-    const b = z.object({ date: D, concept: z.string(), rawAmount: Amt, tag: z.string().nullable(), bucket: z.string().nullable() }).partial().parse(req.body);
+    const b = z.object({ date: D, concept: z.string(), rawAmount: Amt, tag: z.string().nullable(), bucket: z.string().nullable(), person: z.string().nullable() }).partial().parse(req.body);
     await updateEntry(db, uid(req), (req.params as any).id, b);
     return { ok: true };
   });

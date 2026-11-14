@@ -37,6 +37,7 @@ export function FlowPage() {
     queryKey: ['transactions', range, text, categoryId, accountId],
     queryFn: () => get<Tx[]>('/api/transactions' + qs({ from: range.from, to: range.to, text, categoryId, accountId, order: 'desc', limit: 20000 })),
   });
+  const payersQ = useQuery({ queryKey: ['transactions', 'payers'], queryFn: () => get<string[]>('/api/payers') });
   const rows = txs.data ?? [];
   const accs = (accounts.data ?? []).filter((a) => a.inFlow && !a.archived);
   const allAccs = accounts.data ?? [];
@@ -72,6 +73,10 @@ export function FlowPage() {
       display: (r) => isTransfer(r)
         ? <span className="inline-flex items-center gap-1.5"><ArrowRightLeft className="size-3.5 text-sky-600" /> {r.accountName} → {r.toAccountName}{r.item ? <span className="text-muted-foreground"> · {r.item}</span> : null}</span>
         : r.item,
+    },
+    {
+      key: 'payer', label: 'Pagó', width: 120, editable: (r) => !isTransfer(r) && r.kind === 'income', value: (r) => r.payer ?? '',
+      display: (r) => (r.payer ? <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">{r.payer}</span> : ''),
     },
     {
       key: 'category', label: 'Categoría', width: 200, kind: 'search', options: catSearch,
@@ -149,6 +154,7 @@ export function FlowPage() {
       } else if (col === 'category') body = { categoryId: raw || null };
       else if (col === 'account') body = { accountId: raw || null };
       else if (col === 'note') body = { note: raw || null };
+      else if (col === 'payer') body = { payer: raw.trim() || null };
       else body = { [col]: raw };
       await patch(`/api/transactions/${id}`, body);
     }
@@ -188,6 +194,7 @@ export function FlowPage() {
 
       <QuickAdd
         categories={cats.data ?? []}
+        payers={payersQ.data ?? []}
         accounts={accs}
         defaultAccountId={accountId || accs.find((a) => a.isDefault)?.accountId || ''}
         onAdded={async () => { await refresh(); setTopSignal((n) => n + 1); }}
@@ -240,9 +247,10 @@ function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; chi
 
 /** Alta rápida: primero el monto, luego el item, la categoría y el tipo. */
 function QuickAdd({
-  categories, accounts, defaultAccountId, onAdded, onCategoryCreated,
+  categories, payers, accounts, defaultAccountId, onAdded, onCategoryCreated,
 }: {
   categories: Category[];
+  payers: string[];
   accounts: Balance[];
   defaultAccountId: string;
   onAdded: () => Promise<unknown>;
@@ -254,6 +262,7 @@ function QuickAdd({
   const [categoryId, setCategoryId] = useState('');
   const [kind, setKind] = useState<'income' | 'expense'>('expense');
   const [accountId, setAccountId] = useState('');
+  const [payer, setPayer] = useState('');
   const [date, setDate] = useState(today());
   const amountRef = useRef<HTMLInputElement>(null);
   const acct = accountId || defaultAccountId;
@@ -261,10 +270,11 @@ function QuickAdd({
   async function submit(e: FormEvent) {
     e.preventDefault();
     try {
-      await post('/api/transactions', { date, item, kind, rawAmount: amount, categoryId: categoryId || null, accountId: acct || null });
+      await post('/api/transactions', { date, item, kind, rawAmount: amount, categoryId: categoryId || null, accountId: acct || null, ...(kind === 'income' && payer ? { payer } : {}) });
       setAmount('');
       setItem('');
       setCategoryId('');
+      setPayer('');
       await onAdded();
       amountRef.current?.focus(); // listo para cargar el siguiente
     } catch (err) {
@@ -310,9 +320,25 @@ function QuickAdd({
         </Field>
       </div>
       <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-wrap items-end gap-3">
+        {kind === 'income' && (
+          <Field label="¿Quién pagó?" className="w-56">
+            <Combobox
+              ariaLabel="Quién pagó"
+              value={payer}
+              onChange={setPayer}
+              options={payers.map((p) => ({ value: p, label: p }))}
+              placeholder="Tellma, CBG…"
+              searchPlaceholder="Escribe para buscar o crear…"
+              allowClear
+              onCreate={(name) => setPayer(name)}
+            />
+          </Field>
+        )}
         <Field label="Fecha" className="w-44">
           <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required aria-label="Fecha" />
         </Field>
+        </div>
         <Button type="submit"><Plus /> Agregar movimiento</Button>
       </div>
     </form>

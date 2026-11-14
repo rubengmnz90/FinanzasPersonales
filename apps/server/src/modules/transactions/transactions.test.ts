@@ -6,6 +6,7 @@ import {
   balanceAt,
   createTransaction,
   deleteTransaction,
+  listPayers,
   listTransactions,
   updateTransaction,
 } from './service';
@@ -23,6 +24,18 @@ afterAll(async () => {
 });
 
 describe('transactions', () => {
+  it('registra quién pagó solo en ingresos y lo sugiere después', async () => {
+    const u = await makeUser(ctx.db);
+    const inc = await createTransaction(ctx.db, u, { date: '2026-09-01', item: 'Honorarios', kind: 'income', rawAmount: 440000, payer: 'CBG' });
+    expect(inc.payer).toBe('CBG');
+    const exp = await createTransaction(ctx.db, u, { date: '2026-09-02', item: 'Super', kind: 'expense', rawAmount: 1000, payer: 'CBG' });
+    expect(exp.payer).toBeNull();
+    const up = await updateTransaction(ctx.db, u, inc.id, { payer: 'Tellma' });
+    expect(up.payer).toBe('Tellma');
+    expect(await listPayers(ctx.db, u)).toEqual(['Tellma']);
+    expect((await listTransactions(ctx.db, u, { text: 'tellma' })).map((r) => r.id)).toEqual([inc.id]);
+  });
+
   it('guarda la expresión y calcula saldo acumulado respetando el orden de entrada', async () => {
     const cat = await ensureCategory(ctx.db, a, 'Honorarios', 'Ingresos');
     await createTransaction(ctx.db, a, { date: '2026-08-01', item: 'Honorarios', kind: 'income', rawAmount: 1000000, categoryId: cat });

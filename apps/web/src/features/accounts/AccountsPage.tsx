@@ -185,7 +185,7 @@ export function StatementView({ accounts, accountId, onAccount, asOf }: { accoun
   function csv() {
     if (!s) return;
     const lines = [['Fecha', 'Concepto', 'Detalle', 'Objetivo', 'Entrada', 'Salida', 'Saldo'].join(';')];
-    for (const r of s.rows) lines.push([r.date, r.concept, r.detail ?? '', r.bucket ?? '', r.delta > 0 ? r.delta : '', r.delta < 0 ? -r.delta : '', r.balance].join(';'));
+    for (const r of [...s.rows].reverse()) lines.push([r.date, r.concept, r.detail ?? '', r.bucket ?? '', r.delta > 0 ? r.delta : '', r.delta < 0 ? -r.delta : '', r.balance].join(';'));
     const url = URL.createObjectURL(new Blob(['﻿' + lines.join('\n')], { type: 'text/csv;charset=utf-8' }));
     const a = document.createElement('a');
     a.href = url;
@@ -225,8 +225,7 @@ export function StatementView({ accounts, accountId, onAccount, asOf }: { accoun
                 <tr><th>Fecha</th><th>Concepto</th><th>Detalle</th><th>Objetivo</th><th className="r">Entrada</th><th className="r">Salida</th><th className="r">Saldo</th></tr>
               </thead>
               <tbody>
-                <tr className="bg-muted/50"><td colSpan={6} className="text-muted-foreground">Saldo inicial</td><td className="r num font-medium">{money(s.opening)}</td></tr>
-                {s.rows.map((r) => (
+                {[...s.rows].reverse().map((r) => (
                   <tr key={r.key}>
                     <td className="num whitespace-nowrap">{r.date}</td>
                     <td>{r.concept}</td>
@@ -238,6 +237,7 @@ export function StatementView({ accounts, accountId, onAccount, asOf }: { accoun
                   </tr>
                 ))}
                 {!s.rows.length && <tr><td colSpan={7} className="empty">Sin movimientos en este rango.</td></tr>}
+                <tr className="bg-muted/50"><td colSpan={6} className="text-muted-foreground">Saldo inicial</td><td className="r num font-medium">{money(s.opening)}</td></tr>
               </tbody>
             </table>
           </div>

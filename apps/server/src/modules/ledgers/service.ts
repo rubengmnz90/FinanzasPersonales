@@ -28,6 +28,7 @@ export interface LedgerEntry {
   amount: number;
   tag: string | null;
   bucket: string | null;
+  person: string | null;
   balance: number;
 }
 
@@ -162,12 +163,12 @@ export async function addEntry(
   db: Queryable,
   userId: string,
   accountId: string,
-  input: { date: string; concept: string; rawAmount: string | number; tag?: string | null; bucket?: string | null; importKey?: string },
+  input: { date: string; concept: string; rawAmount: string | number; tag?: string | null; bucket?: string | null; person?: string | null; importKey?: string },
 ): Promise<string> {
   await getAccount(db, userId, accountId);
   const r = await db.query(
-    `INSERT INTO ledger_entries(account_id,date,concept,amount,tag,bucket,import_key) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-    [accountId, input.date, input.concept, parseAmount(input.rawAmount), input.tag ?? null, input.bucket ?? null, input.importKey ?? null],
+    `INSERT INTO ledger_entries(account_id,date,concept,amount,tag,bucket,person,import_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [accountId, input.date, input.concept, parseAmount(input.rawAmount), input.tag ?? null, input.bucket ?? null, input.person?.trim() || null, input.importKey ?? null],
   );
   return r.rows[0].id;
 }
@@ -176,20 +177,21 @@ export async function updateEntry(
   db: Queryable,
   userId: string,
   entryId: string,
-  patch: Partial<{ date: string; concept: string; rawAmount: string | number; tag: string | null; bucket: string | null }>,
+  patch: Partial<{ date: string; concept: string; rawAmount: string | number; tag: string | null; bucket: string | null; person: string | null }>,
 ): Promise<void> {
   const cur = (await db.query(
     `SELECT e.* FROM ledger_entries e JOIN accounts a ON a.id=e.account_id WHERE e.id=$1 AND a.user_id=$2`,
     [entryId, userId],
   )).rows[0];
   if (!cur) throw new NotFoundError('movimiento de cuenta');
-  await db.query('UPDATE ledger_entries SET date=$2, concept=$3, amount=$4, tag=$5, bucket=$6 WHERE id=$1', [
+  await db.query('UPDATE ledger_entries SET date=$2, concept=$3, amount=$4, tag=$5, bucket=$6, person=$7 WHERE id=$1', [
     entryId,
     patch.date ?? cur.date,
     patch.concept ?? cur.concept,
     patch.rawAmount === undefined ? cur.amount : parseAmount(patch.rawAmount),
     patch.tag === undefined ? cur.tag : patch.tag,
     patch.bucket === undefined ? cur.bucket : patch.bucket,
+    patch.person === undefined ? cur.person : patch.person?.trim() || null,
   ]);
 }
 
@@ -234,7 +236,7 @@ export async function getLedger(
   const account = await getAccount(db, userId, accountId);
   const r = await db.query(
     `SELECT * FROM (
-       SELECT id, date, seq, concept, amount, tag, bucket,
+       SELECT id, date, seq, concept, amount, tag, bucket, person,
               SUM(amount) OVER (ORDER BY date, seq ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS balance
        FROM ledger_entries WHERE account_id=$1) x
      WHERE ($2::date IS NULL OR date >= $2) AND ($3::date IS NULL OR date <= $3)
@@ -244,7 +246,7 @@ export async function getLedger(
   const total = (await db.query(`SELECT ${BALANCE_SQL} AS b FROM accounts a WHERE a.id=$1`, [accountId, null])).rows[0].b;
   return {
     account,
-    entries: r.rows.map((e: any) => ({ id: e.id, date: e.date, concept: e.concept, amount: e.amount, tag: e.tag, bucket: e.bucket, balance: e.balance })),
+    entries: r.rows.map((e: any) => ({ id: e.id, date: e.date, concept: e.concept, amount: e.amount, tag: e.tag, bucket: e.bucket, person: e.person, balance: e.balance })),
     balance: total,
     owed: owedOf(account, total),
   };
@@ -390,26 +392,90 @@ export async function pendingTempWithdrawals(db: Queryable, userId: string, acco
   return r.rows[0].p;
 }
 
-export interface SavingsWithdrawals {
-  /** Retiros temporales (tag temp_withdrawal) con su concepto: lo que se sacó del ahorro y debe reponerse. */
-  withdrawals: { id: string; date: string; concept: string; amount: number }[];
-  /** Devoluciones al ahorro (tag return). */
-  returns: { id: string; date: string; concept: string; amount: number }[];
-  totalWithdrawn: number;
-  totalReturned: number;
+export type SavingsMoveKind = 'deposit' | 'withdrawal' | 'loan' | 'return';
+
+export interface SavingsMove {
+  key: string;
+  source: 'entry' | 'transfer';
+  id: string;
+  date: string;
+  kind: SavingsMoveKind;
+  concept: string;
+  /** Con signo respecto del ahorro: lo que entra suma, lo que sale resta. */
+  amount: number;
+  bucket: string | null;
+  /** Solo préstamos y devoluciones: a quién se le prestó. null = préstamo normal. */
+  person: string | null;
+  balance: number;
+}
+
+export interface SavingsPerson {
+  /** null = préstamos normales (sin persona). */
+  person: string | null;
+  lent: number;
+  returned: number;
   pending: number;
 }
 
-/** Detalle de lo retirado del ahorro por concepto y lo ya devuelto. */
-export async function savingsWithdrawals(db: Queryable, userId: string, accountId: string): Promise<SavingsWithdrawals> {
+export interface SavingsOverview {
+  /** Todos los movimientos del ahorro, del más viejo al más nuevo (la pantalla los invierte). */
+  moves: SavingsMove[];
+  people: SavingsPerson[];
+  totals: { deposits: number; withdrawals: number; lent: number; returned: number; pending: number };
+}
+
+/**
+ * Lo que pasó en el ahorro, separado en depósitos, extracciones (sacaste de tu ahorro), préstamos
+ * (sale pero hay que devolver) y devoluciones, con el pendiente por persona.
+ */
+export async function savingsOverview(db: Queryable, userId: string, accountId: string): Promise<SavingsOverview> {
   await getAccount(db, userId, accountId);
   const r = await db.query(
-    `SELECT id, date, concept, amount, tag FROM ledger_entries WHERE account_id=$1 AND tag IN ('temp_withdrawal','return') ORDER BY date, seq`,
+    `SELECT * FROM (
+       SELECT e.date, e.seq, 'entry' AS source, e.id, e.concept, e.amount, e.tag, e.bucket, e.person, NULL AS kind, NULL AS other
+         FROM ledger_entries e WHERE e.account_id=$1
+       UNION ALL
+       SELECT x.date, x.seq, 'transfer', x.id,
+              COALESCE(NULLIF(x.note,''), CASE x.kind WHEN 'loan' THEN 'Préstamo a ' || o.name WHEN 'repayment' THEN 'Devolución de ' || f.name
+                WHEN 'transfer' THEN CASE WHEN x.to_account_id=$1 THEN 'Desde ' || f.name ELSE 'Hacia ' || o.name END END),
+              CASE WHEN x.to_account_id=$1 THEN x.amount ELSE -x.amount END, NULL, x.bucket, NULL, x.kind,
+              CASE WHEN x.to_account_id=$1 THEN f.name ELSE o.name END
+         FROM transfers x JOIN accounts f ON f.id=x.from_account_id JOIN accounts o ON o.id=x.to_account_id
+         WHERE x.from_account_id=$1 OR x.to_account_id=$1
+     ) u ORDER BY date, seq`,
     [accountId],
   );
-  const withdrawals = r.rows.filter((e: any) => e.tag === 'temp_withdrawal').map((e: any) => ({ id: e.id, date: e.date, concept: e.concept, amount: -e.amount }));
-  const returns = r.rows.filter((e: any) => e.tag === 'return').map((e: any) => ({ id: e.id, date: e.date, concept: e.concept, amount: e.amount }));
-  const totalWithdrawn = withdrawals.reduce((s: number, x: any) => s + x.amount, 0);
-  const totalReturned = returns.reduce((s: number, x: any) => s + x.amount, 0);
-  return { withdrawals, returns, totalWithdrawn, totalReturned, pending: totalWithdrawn - totalReturned };
+  const acc = (await db.query('SELECT opening_balance FROM accounts WHERE id=$1', [accountId])).rows[0];
+  let bal = Number(acc.opening_balance);
+  const moves: SavingsMove[] = [];
+  for (const x of r.rows) {
+    let kind: SavingsMoveKind;
+    let person: string | null = null;
+    if (x.source === 'entry') {
+      kind = x.tag === 'temp_withdrawal' ? 'loan' : x.tag === 'return' ? 'return' : x.amount >= 0 ? 'deposit' : 'withdrawal';
+      if (kind === 'loan' || kind === 'return') person = x.person;
+    } else if (x.kind === 'loan') {
+      kind = 'loan';
+      person = x.other;
+    } else if (x.kind === 'repayment') {
+      kind = 'return';
+      person = x.other;
+    } else kind = x.amount >= 0 ? 'deposit' : 'withdrawal';
+    bal += Number(x.amount);
+    moves.push({ key: `${x.source}:${x.id}`, source: x.source, id: x.id, date: x.date, kind, concept: x.concept, amount: Number(x.amount), bucket: x.bucket, person, balance: bal });
+  }
+  const byPerson = new Map<string | null, SavingsPerson>();
+  for (const m of moves) {
+    if (m.kind !== 'loan' && m.kind !== 'return') continue;
+    const p = byPerson.get(m.person) ?? { person: m.person, lent: 0, returned: 0, pending: 0 };
+    if (m.kind === 'loan') p.lent += -m.amount;
+    else p.returned += m.amount;
+    p.pending = p.lent - p.returned;
+    byPerson.set(m.person, p);
+  }
+  const people = [...byPerson.values()].sort((a, b) => b.pending - a.pending || String(a.person ?? '~').localeCompare(String(b.person ?? '~')));
+  const sum = (k: SavingsMoveKind) => moves.filter((m) => m.kind === k).reduce((s, m) => s + Math.abs(m.amount), 0);
+  const lent = sum('loan');
+  const returned = sum('return');
+  return { moves, people, totals: { deposits: sum('deposit'), withdrawals: sum('withdrawal'), lent, returned, pending: lent - returned } };
 }

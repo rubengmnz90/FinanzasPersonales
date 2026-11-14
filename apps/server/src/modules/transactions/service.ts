@@ -16,6 +16,8 @@ export interface TransactionRow {
   categoryName: string | null;
   groupName: string | null;
   note: string | null;
+  /** Quién pagó (solo ingresos): Tellma, CBG... */
+  payer: string | null;
   accountId: string | null;
   accountName: string | null;
   /** Solo transferencias. */
@@ -64,13 +66,13 @@ export async function listTransactions(db: Queryable, userId: string, q: TxQuery
   const all: Raw[] = [
     ...tx.rows.map((r: any): Raw => ({
       id: r.id, rowType: 'tx', date: r.date, item: r.item, kind: r.kind, amount: r.amount, amountExpr: r.amount_expr,
-      categoryId: r.category_id, categoryName: r.category_name, groupName: r.group_name, note: r.note,
+      categoryId: r.category_id, categoryName: r.category_name, groupName: r.group_name, note: r.note, payer: r.payer ?? null,
       accountId: r.account_id, accountName: r.account_name, toAccountId: null, toAccountName: null, bucket: null,
       transferKind: null, at: new Date(r.created_at).getTime(), seq: Number(r.seq),
     })),
     ...tr.rows.map((r: any): Raw => ({
       id: r.id, rowType: 'transfer', date: r.date, item: r.note ?? '', kind: 'transfer', amount: r.amount, amountExpr: null,
-      categoryId: null, categoryName: null, groupName: null, note: r.note, accountId: r.from_account_id, accountName: r.from_name,
+      categoryId: null, categoryName: null, groupName: null, note: r.note, payer: null, accountId: r.from_account_id, accountName: r.from_name,
       toAccountId: r.to_account_id, toAccountName: r.to_name, bucket: r.bucket, transferKind: r.kind,
       at: new Date(r.created_at).getTime(), seq: Number(r.seq),
     })),
@@ -104,7 +106,7 @@ export async function listTransactions(db: Queryable, userId: string, q: TxQuery
       if (q.groupName && r.groupName !== q.groupName) continue;
       if (scope && r.accountId !== scope) continue;
     }
-    if (text && !`${r.item} ${r.note ?? ''} ${r.accountName ?? ''} ${r.toAccountName ?? ''} ${r.categoryName ?? ''}`.toLowerCase().includes(text)) continue;
+    if (text && !`${r.item} ${r.note ?? ''} ${r.payer ?? ''} ${r.accountName ?? ''} ${r.toAccountName ?? ''} ${r.categoryName ?? ''}`.toLowerCase().includes(text)) continue;
     const { at: _a, seq: _s, ...row } = r;
     out.push({ ...row, balance: bal });
   }
@@ -125,6 +127,8 @@ export interface TxInput {
   rawAmount: string | number;
   categoryId?: string | null;
   note?: string | null;
+  /** Quién pagó (ingresos). */
+  payer?: string | null;
   /** Cuenta del movimiento; por defecto la cuenta predeterminada (GNB). */
   accountId?: string | null;
   importKey?: string;
@@ -158,9 +162,9 @@ export async function createTransaction(db: Queryable, userId: string, input: Tx
   await assertFlowAccount(db, userId, input.accountId);
   const accountId = input.accountId ?? (await defaultAccountId(db, userId));
   const r = await db.query(
-    `INSERT INTO transactions(user_id,date,item,kind,amount,amount_expr,category_id,note,account_id,import_key)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-    [userId, input.date, input.item, input.kind, amount, expr, input.categoryId ?? null, input.note ?? null, accountId, input.importKey ?? null],
+    `INSERT INTO transactions(user_id,date,item,kind,amount,amount_expr,category_id,note,account_id,import_key,payer)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+    [userId, input.date, input.item, input.kind, amount, expr, input.categoryId ?? null, input.note ?? null, accountId, input.importKey ?? null, input.kind === 'income' ? input.payer?.trim() || null : null],
   );
   return getTransaction(db, userId, r.rows[0].id);
 }
@@ -178,7 +182,7 @@ export async function updateTransaction(
   if (patch.categoryId !== undefined) await assertCategory(db, userId, patch.categoryId);
   if (patch.accountId !== undefined) await assertFlowAccount(db, userId, patch.accountId);
   await db.query(
-    `UPDATE transactions SET date=$3, item=$4, kind=$5, amount=$6, amount_expr=$7, category_id=$8, note=$9, account_id=$10
+    `UPDATE transactions SET date=$3, item=$4, kind=$5, amount=$6, amount_expr=$7, category_id=$8, note=$9, account_id=$10, payer=$11
      WHERE id=$1 AND user_id=$2`,
     [
       id,
@@ -191,6 +195,7 @@ export async function updateTransaction(
       patch.categoryId === undefined ? cur.categoryId : patch.categoryId,
       patch.note === undefined ? cur.note : patch.note,
       patch.accountId === undefined ? cur.accountId : patch.accountId,
+      (patch.kind ?? cur.kind) === 'income' ? (patch.payer === undefined ? cur.payer : patch.payer?.trim() || null) : null,
     ],
   );
   return getTransaction(db, userId, id);
@@ -216,4 +221,13 @@ export async function balanceAt(db: Queryable, userId: string, date: string): Pr
     [userId, date],
   );
   return r.rows[0].b;
+}
+
+/** Quienes ya pagaron alguna vez (para sugerir al registrar un ingreso). */
+export async function listPayers(db: Queryable, userId: string): Promise<string[]> {
+  const r = await db.query(
+    `SELECT payer FROM transactions WHERE user_id=$1 AND payer IS NOT NULL GROUP BY payer ORDER BY MAX(date) DESC, payer`,
+    [userId],
+  );
+  return r.rows.map((x: any) => x.payer as string);
 }

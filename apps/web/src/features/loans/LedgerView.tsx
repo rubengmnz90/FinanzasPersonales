@@ -34,6 +34,8 @@ export function LedgerView({
   const [range, setRange] = useState<Range>({ from: '', to: '' });
   const q = useQuery({ queryKey: ['ledger', accountId, range], queryFn: () => get<Ledger>(`/api/accounts/${accountId}` + qs({ from: range.from, to: range.to })) });
   const l = q.data;
+  // Más nuevo arriba (como el flujo); el saldo de cada fila sigue siendo el acumulado a esa fecha.
+  const rows = l ? [...l.entries].reverse() : [];
   const refresh = async () => { await qc.invalidateQueries({ queryKey: ['ledger'] }); await onChanged(); };
   if (!l) return null;
 
@@ -41,6 +43,7 @@ export function LedgerView({
     { key: 'date', label: 'Fecha', width: 120, kind: 'date', editable: true, value: (r) => r.date },
     { key: 'concept', label: 'Concepto', width: 280, editable: true, value: (r) => r.concept },
     ...(showBucket ? [{ key: 'bucket', label: 'Objetivo', width: 140, editable: true, value: (r: LedgerEntry) => r.bucket ?? '' } as Column<LedgerEntry>] : []),
+    ...(showBucket ? [{ key: 'person', label: 'Persona', width: 150, editable: true, value: (r: LedgerEntry) => r.person ?? '' } as Column<LedgerEntry>] : []),
     { key: 'amount', label: 'Monto', width: 140, align: 'right', kind: 'money', editable: true, value: (r) => r.amount, display: (r) => <Money v={r.amount} signed /> },
     { key: 'balance', label: 'Saldo', width: 140, align: 'right', value: (r) => r.balance, display: (r) => <Money v={r.balance} /> },
     {
@@ -74,12 +77,12 @@ export function LedgerView({
       <DataGrid
         ariaLabel={labels.grid}
         columns={columns}
-        rows={l.entries}
+        rows={rows}
         rowId={(r) => r.id}
         onError={onError}
-        height={Math.min(520, 34 * (l.entries.length + 2))}
+        height={Math.min(520, 34 * (rows.length + 2))}
         onCommit={async (id, col, raw) => {
-          await patch(`/api/entries/${id}`, col === 'amount' ? { rawAmount: raw } : col === 'bucket' ? { bucket: raw.trim() || null } : { [col]: raw });
+          await patch(`/api/entries/${id}`, col === 'amount' ? { rawAmount: raw } : col === 'bucket' ? { bucket: raw.trim() || null } : col === 'person' ? { person: raw.trim() || null } : { [col]: raw });
           await refresh();
         }}
       />
@@ -87,18 +90,34 @@ export function LedgerView({
   );
 }
 
+/** Tipos de movimiento de un ahorro: el signo y la marca que lo distingue de un préstamo. */
+const SAVINGS_KINDS: { id: string; label: string; sign: 1 | -1; tag?: string }[] = [
+  { id: 'deposit', label: 'Depósito (aporte a mi ahorro)', sign: 1 },
+  { id: 'withdrawal', label: 'Extracción (saqué mi ahorro)', sign: -1 },
+  { id: 'loan', label: 'Préstamo (sale, hay que devolver)', sign: -1, tag: 'temp_withdrawal' },
+  { id: 'return', label: 'Devolución (vuelve a mi ahorro)', sign: 1, tag: 'return' },
+];
+
 function AddEntry({ accountId, labels, showBucket, onAdded, onError }: { accountId: string; labels: LedgerLabels; showBucket?: boolean; onAdded: () => Promise<unknown>; onError: (e: unknown) => void }) {
   const [date, setDate] = useState(today());
   const [concept, setConcept] = useState('');
   const [amount, setAmount] = useState('');
   const [bucket, setBucket] = useState('');
-  const [flow, setFlow] = useState<'plus' | 'minus'>('plus');
+  const [flow, setFlow] = useState<string>('plus');
+  const [person, setPerson] = useState('');
+  const kinds = showBucket ? SAVINGS_KINDS : [{ id: 'plus', label: labels.plus, sign: 1 }, { id: 'minus', label: labels.minus, sign: -1 }];
+  const kind = kinds.find((k) => k.id === flow) ?? kinds[0];
   async function submit(e: FormEvent) {
     e.preventDefault();
     try {
       const raw = amount.trim();
-      const rawAmount = flow === 'minus' ? `=-(${raw.replace(/^=/, '')})` : raw;
-      await post(`/api/accounts/${accountId}/entries`, { date, concept, rawAmount, ...(showBucket && bucket ? { bucket } : {}) });
+      const rawAmount = kind.sign < 0 ? `=-(${raw.replace(/^=/, '')})` : raw;
+      await post(`/api/accounts/${accountId}/entries`, {
+        date, concept, rawAmount,
+        ...(showBucket && bucket ? { bucket } : {}),
+        ...('tag' in kind && kind.tag ? { tag: kind.tag } : {}),
+        ...('tag' in kind && kind.tag && person.trim() ? { person: person.trim() } : {}),
+      });
       setConcept(''); setAmount('');
       await onAdded();
     } catch (err) { onError(err); }
@@ -108,10 +127,10 @@ function AddEntry({ accountId, labels, showBucket, onAdded, onError }: { account
       <Field label="Monto" className="w-40"><Input className="num text-right" placeholder="0 o =fórmula" value={amount} onChange={(e) => setAmount(e.target.value)} required aria-label="Monto" /></Field>
       <Field label="Concepto" className="min-w-48 flex-1"><Input value={concept} onChange={(e) => setConcept(e.target.value)} required aria-label="Concepto" /></Field>
       {showBucket && <Field label="Objetivo" className="w-36"><Input value={bucket} onChange={(e) => setBucket(e.target.value)} placeholder="Ahorro…" aria-label="Objetivo" /></Field>}
-      <Field label="Tipo" className="w-44">
-        <NativeSelect value={flow} onChange={(e) => setFlow(e.target.value as 'plus' | 'minus')} aria-label="Tipo de movimiento">
-          <option value="plus">{labels.plus}</option>
-          <option value="minus">{labels.minus}</option>
+      {showBucket && 'tag' in kind && !!kind.tag && <Field label="Persona" className="w-40"><Input value={person} onChange={(e) => setPerson(e.target.value)} placeholder="Charlie… (vacío = normal)" aria-label="Persona" /></Field>}
+      <Field label="Tipo" className="w-60">
+        <NativeSelect value={kind.id} onChange={(e) => setFlow(e.target.value)} aria-label="Tipo de movimiento">
+          {kinds.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
         </NativeSelect>
       </Field>
       <Field label="Fecha" className="w-40"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required aria-label="Fecha" /></Field>
