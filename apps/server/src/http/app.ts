@@ -115,7 +115,7 @@ export async function buildApp(db: Db, opts: AppOptions = {}): Promise<FastifyIn
     const mig = await db.query('SELECT name FROM schema_migrations ORDER BY name');
     const cols = await db.query(
       `SELECT table_name || '.' || column_name AS c FROM information_schema.columns
-       WHERE (table_name='ledger_entries' AND column_name='person') OR (table_name='transactions' AND column_name='payer')`,
+       WHERE table_schema = current_schema() AND ((table_name='ledger_entries' AND column_name='person') OR (table_name='transactions' AND column_name='payer'))`,
     );
     return { migraciones: mig.rows.map((r: any) => r.name), columnas: cols.rows.map((r: any) => r.c) };
   });
