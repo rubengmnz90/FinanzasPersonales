@@ -84,12 +84,20 @@ export function createMcpServer(ctx: McpCtx): McpServer {
   tool(
     'add_transaction',
     'finanzas:write',
-    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta. Si `account` es un ahorro (p. ej. Ahorro Coomecipar) se anota en la cuenta: un ingreso sin `bucket` es la devolución de un retiro temporal; con `bucket` es un aporte a ese objetivo; un egreso es un retiro temporal.',
+    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta. Si `account` es una tarjeta se anota como uso (egreso) o pago (ingreso) de la tarjeta. Si `account` es un ahorro (p. ej. Ahorro Coomecipar) se anota en la cuenta: un ingreso sin `bucket` es la devolución de un retiro temporal; con `bucket` es un aporte a ese objetivo; un egreso es un retiro temporal.',
     { date: D.optional().describe('Por defecto hoy'), item: z.string().min(1), kind: z.enum(['income', 'expense']), amount: Amt, category: z.string().optional().describe('Nombre exacto de la categoría'), account: z.string().optional().describe('Nombre de la cuenta (list_accounts)'), bucket: z.string().optional().describe('Solo ahorros: objetivo del aporte (Ahorro, Vacaciones...)'), note: z.string().optional() },
     async (a) => {
       if (a.account) {
         const sid = await accountIdByName(db, userId, a.account);
-        if (sid && (await getAccount(db, userId, sid)).type === 'savings') {
+        const accType = sid ? (await getAccount(db, userId, sid)).type : null;
+        if (sid && accType === 'card') {
+          // Uso de tarjeta: un egreso baja el disponible, un ingreso (pago) lo sube. No toca el flujo de caja.
+          const date = a.date ?? new Date().toISOString().slice(0, 10);
+          const value = Math.abs(parseAmount(a.amount));
+          const id = await addEntry(db, userId, sid, { date, concept: a.item, rawAmount: a.kind === 'income' ? value : -value });
+          return { id, account: a.account, date, concept: a.item, kind: a.kind };
+        }
+        if (sid && accType === 'savings') {
           const date = a.date ?? new Date().toISOString().slice(0, 10);
           const value = Math.abs(parseAmount(a.amount));
           const tag = a.kind === 'expense' ? 'temp_withdrawal' : a.bucket ? null : 'return';
