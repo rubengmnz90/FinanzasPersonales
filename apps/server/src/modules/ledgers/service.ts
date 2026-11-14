@@ -344,7 +344,11 @@ export async function accountStatement(
   const account = await getAccount(db, userId, accountId);
   const r = await db.query(
     `SELECT * FROM (
-       SELECT e.date, 1 AS rank, e.seq, 'entry' AS source, e.id, e.concept, e.tag AS detail, e.amount AS delta, e.bucket
+       SELECT e.date, 1 AS rank, e.seq, 'entry' AS source, e.id, e.concept,
+              CASE e.tag WHEN 'temp_withdrawal' THEN 'Préstamo' || COALESCE(' · ' || e.person, '')
+                         WHEN 'return' THEN 'Devolución' || COALESCE(' · ' || e.person, '')
+                         ELSE e.tag END AS detail,
+              e.amount AS delta, e.bucket
          FROM ledger_entries e WHERE e.account_id=$1
        UNION ALL
        SELECT t.date, 2, t.seq, 'flow', t.id, t.item, c.name, CASE WHEN t.kind='income' THEN t.amount ELSE -t.amount END, NULL

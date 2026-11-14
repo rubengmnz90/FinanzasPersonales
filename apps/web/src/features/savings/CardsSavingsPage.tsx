@@ -14,7 +14,8 @@ import { Bar, Kpi, Money, money, today, useToast } from '../../components/ui';
 import { AccountForm, Empty, StatementView } from '../accounts/AccountsPage';
 import { TransferDialog, type TransferMode } from '../accounts/TransferDialog';
 import { LedgerView, type LedgerLabels } from '../loans/LedgerView';
-import { SavingsMovements } from './SavingsMovements';
+import { PersonCard, SavingsMovements } from './SavingsMovements';
+import type { SavingsMove, SavingsOverview, SavingsPerson } from '../../app/types';
 
 const ALL_KEYS = ['accounts', 'statement', 'ledger', 'savings-overview', 'buckets', 'transactions', 'health'];
 const CARD_LABELS: LedgerLabels = { plus: 'Pago o abono (libera cupo)', minus: 'Compra o cargo (usa cupo)', grid: 'Movimientos de la tarjeta' };
@@ -81,11 +82,14 @@ export function SavingsPage() {
   const k = useKit();
   const savings = k.list.filter((a) => a.type === 'savings');
   const debtors = k.list.filter((a) => a.type === 'receivable');
+  const overview = useQuery({ queryKey: ['savings-overview', savings[0]?.accountId], enabled: !!savings[0], queryFn: () => get<SavingsOverview>(`/api/accounts/${savings[0].accountId}/savings-overview`) });
+  const owing = (overview.data?.people ?? []).filter((p) => p.pending !== 0);
   const total = savings.reduce((s, a) => s + a.balance, 0);
   const locked = savings.reduce((s, a) => s + a.untouchable, 0);
   const free = savings.reduce((s, a) => s + a.touchable, 0);
   const lent = savings.reduce((s, a) => s + a.loansPending, 0);
-  const owedToMe = debtors.reduce((s, a) => s + a.balance, 0);
+  const owedToMe = debtors.reduce((s, a) => s + a.balance, 0) + owing.reduce((s, p) => s + p.pending, 0);
+  const peopleCount = debtors.length + owing.length;
 
   return (
     <div className="flex flex-col gap-8 pb-10">
@@ -104,7 +108,7 @@ export function SavingsPage() {
         <Kpi label="Monto intocable" value={<Money v={locked} />} sub="Aguinaldo, vacaciones y otros marcados" />
         <Kpi label="Saldo que puedo tocar" value={<Money v={free} signed />} tone={free < 0 ? 'neg' : 'pos'} sub={free < 0 ? 'Ya usaste parte de lo intocable' : 'Ahorros − intocable'} />
         <Kpi label="Prestado del ahorro" value={<Money v={lent} />} tone={lent > 0 ? 'neg' : undefined} sub={lent > 0 ? 'Pendiente de devolver' : 'Nada pendiente'} />
-        {debtors.length > 0 && <Kpi label="Me deben de mi ahorro" value={<Money v={owedToMe} />} tone={owedToMe > 0 ? 'neg' : 'pos'} sub={`${debtors.length} persona${debtors.length === 1 ? '' : 's'}`} />}
+        {peopleCount > 0 && <Kpi label="Me deben de mi ahorro" value={<Money v={owedToMe} />} tone={owedToMe > 0 ? 'neg' : 'pos'} sub={`${peopleCount} persona${peopleCount === 1 ? '' : 's'}`} />}
       </div>
       {savings.map((a) => (
         <SavingsPanel key={a.accountId} a={a} onChanged={k.refresh} onEdit={() => k.setEditing(a)}
@@ -113,7 +117,7 @@ export function SavingsPage() {
           onRepay={() => k.openTransfer({ mode: 'repay' })} />
       ))}
       {!savings.length && <Empty>Crea una cuenta de ahorro para empezar.</Empty>}
-      <DebtorsSection debtors={debtors} hasSavings={savings.length > 0}
+      <DebtorsSection debtors={debtors} owing={owing} moves={overview.data?.moves ?? []} hasSavings={savings.length > 0}
         onAdd={() => k.setCreating('receivable')}
         onLend={(d) => k.openTransfer({ mode: 'loan', from: savings[0]?.accountId, to: d?.accountId })}
         onCollect={(d) => k.openTransfer({ mode: 'transfer', from: d.accountId })}
@@ -237,8 +241,8 @@ function ChargeDialog({ card, onClose, onDone }: { card: Balance | null; onClose
 }
 
 // ── Personas a las que presté del ahorro ──
-function DebtorsSection({ debtors, hasSavings, onAdd, onLend, onCollect, onReturn, onRepayDirect, onEdit }: {
-  debtors: Balance[]; hasSavings: boolean; onAdd: () => void; onLend: (d?: Balance) => void; onCollect: (d: Balance) => void;
+function DebtorsSection({ debtors, owing, moves, hasSavings, onAdd, onLend, onCollect, onReturn, onRepayDirect, onEdit }: {
+  debtors: Balance[]; owing: SavingsPerson[]; moves: SavingsMove[]; hasSavings: boolean; onAdd: () => void; onLend: (d?: Balance) => void; onCollect: (d: Balance) => void;
   onReturn: () => void; onRepayDirect: (d: Balance) => void; onEdit: (d: Balance) => void;
 }) {
   return (
@@ -256,6 +260,11 @@ function DebtorsSection({ debtors, hasSavings, onAdd, onLend, onCollect, onRetur
           {hasSavings && debtors.length > 0 && <Button variant="outline" onClick={onReturn}>Devolver al ahorro</Button>}
         </div>
       </div>
+      {owing.length > 0 && (
+        <ul className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Préstamos pendientes por persona">
+          {owing.map((p) => <PersonCard key={p.person ?? '__normal'} p={p} moves={moves} />)}
+        </ul>
+      )}
       {debtors.length ? (
         <ul className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Personas que me deben">
           {debtors.map((d) => (
@@ -274,7 +283,7 @@ function DebtorsSection({ debtors, hasSavings, onAdd, onLend, onCollect, onRetur
             </li>
           ))}
         </ul>
-      ) : (
+      ) : owing.length ? null : (
         <div className="mt-6 rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
           Nadie te debe de tu ahorro. Agrega a la persona con “Nueva persona” y luego usa “Prestarle”.
         </div>

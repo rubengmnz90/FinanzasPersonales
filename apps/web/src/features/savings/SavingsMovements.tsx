@@ -27,9 +27,33 @@ function summaryText(p: SavingsPerson, moves: SavingsMove[]): string {
   return `${head}\n${lines.join('\n')}\nPrestado ${money(p.lent)} · devuelto ${money(p.returned)} · pendiente ${money(p.pending)}`;
 }
 
+/** Tarjeta de una persona que me debe del ahorro (usada en Movimientos y en "Me deben de mi ahorro"). */
+export function PersonCard({ p, moves, on, onPick }: { p: SavingsPerson; moves: SavingsMove[]; on?: boolean; onPick?: () => void }) {
+  const toast = useToast();
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(summaryText(p, moves));
+      toast.ok(`Resumen de ${personLabel(p.person)} copiado`);
+    } catch (e) { toast.error(e); }
+  }
+  return (
+    <li className={`rounded-xl border p-4 transition-colors ${on ? 'border-primary bg-primary/5' : ''}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="font-medium">{personLabel(p.person)}</div>
+        <Badge variant={p.pending > 0 ? 'warn' : 'ok'}>{p.pending > 0 ? 'Debe' : 'Saldado'}</Badge>
+      </div>
+      <div className={`num mt-2 text-2xl font-semibold ${p.pending > 0 ? 'neg' : ''}`}>{money(p.pending)}</div>
+      <div className="mt-1 text-xs text-muted-foreground">prestado {money(p.lent)} · devuelto {money(p.returned)}</div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {onPick && <Button size="sm" variant={on ? 'default' : 'outline'} onClick={onPick}>{on ? 'Ver todos' : 'Ver detalle'}</Button>}
+        <Button size="sm" variant="ghost" onClick={copy} aria-label={`Copiar resumen de ${personLabel(p.person)}`}><Copy /> Copiar resumen</Button>
+      </div>
+    </li>
+  );
+}
+
 /** Vista del ahorro pensada para usarse: depósitos, extracciones, préstamos y devoluciones, y cuánto debe cada persona. */
 export function SavingsMovements({ accountId }: { accountId: string }) {
-  const toast = useToast();
   const q = useQuery({ queryKey: ['savings-overview', accountId], queryFn: () => get<SavingsOverview>(`/api/accounts/${accountId}/savings-overview`) });
   const [kind, setKind] = useState<SavingsMoveKind | 'all'>('all');
   // undefined = todas las personas; null = préstamos normales; string = esa persona.
@@ -44,13 +68,6 @@ export function SavingsMovements({ accountId }: { accountId: string }) {
     .reverse();
   const owing = o.people.filter((p) => p.pending !== 0);
 
-  async function copy(p: SavingsPerson) {
-    try {
-      await navigator.clipboard.writeText(summaryText(p, o!.moves));
-      toast.ok(`Resumen de ${personLabel(p.person)} copiado`);
-    } catch (e) { toast.error(e); }
-  }
-
   return (
     <div className="flex flex-col gap-6">
       <div className="grid-cards !mb-0">
@@ -64,25 +81,9 @@ export function SavingsMovements({ accountId }: { accountId: string }) {
         <h3 className="!mb-3 flex items-center gap-2 text-base"><Users className="size-4" /> Quién me debe</h3>
         {owing.length ? (
           <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {owing.map((p) => {
-              const on = person === p.person;
-              return (
-                <li key={p.person ?? '__normal'} className={`rounded-xl border p-4 transition-colors ${on ? 'border-primary bg-primary/5' : ''}`}>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="font-medium">{personLabel(p.person)}</div>
-                    <Badge variant={p.pending > 0 ? 'warn' : 'ok'}>{p.pending > 0 ? 'Debe' : 'Saldado'}</Badge>
-                  </div>
-                  <div className={`num mt-2 text-2xl font-semibold ${p.pending > 0 ? 'neg' : ''}`}>{money(p.pending)}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">prestado {money(p.lent)} · devuelto {money(p.returned)}</div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button size="sm" variant={on ? 'default' : 'outline'} onClick={() => { setPerson(on ? undefined : p.person); setKind('all'); }}>
-                      {on ? 'Ver todos' : 'Ver detalle'}
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => copy(p)} aria-label={`Copiar resumen de ${personLabel(p.person)}`}><Copy /> Copiar resumen</Button>
-                  </div>
-                </li>
-              );
-            })}
+            {owing.map((p) => (
+              <PersonCard key={p.person ?? '__normal'} p={p} moves={o.moves} on={person === p.person} onPick={() => { setPerson(person === p.person ? undefined : p.person); setKind('all'); }} />
+            ))}
           </ul>
         ) : (
           <div className="rounded-xl border border-dashed p-5 text-center text-sm text-muted-foreground">Nadie te debe nada de tu ahorro.</div>
