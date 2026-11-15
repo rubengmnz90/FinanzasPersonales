@@ -14,7 +14,7 @@ ENV NODE_ENV=production PORT=3000
 WORKDIR /app
 # pg_dump (misma versión mayor que la base) para el respaldo completo descargable.
 ARG PG_CLIENT_VERSION=16
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg  && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg  && . /etc/os-release && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list  && apt-get update && apt-get install -y --no-install-recommends postgresql-client-${PG_CLIENT_VERSION}  && apt-get purge -y curl gnupg && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg  && curl -fsSL --http1.1 --retry 5 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 60 -o /tmp/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc  && gpg --batch --yes --dearmor -o /usr/share/keyrings/pgdg.gpg /tmp/pgdg.asc && rm -f /tmp/pgdg.asc  && . /etc/os-release && echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list  && apt-get update && apt-get install -y --no-install-recommends postgresql-client-${PG_CLIENT_VERSION}  && apt-get purge -y curl gnupg && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 COPY --from=build --chown=node:node /app /app
 USER node
 WORKDIR /app/apps/server
