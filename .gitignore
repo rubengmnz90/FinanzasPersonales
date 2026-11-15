@@ -19,3 +19,6 @@ backups/
 .env.*
 !.env.example
 .mcp.json
+
+# Notas privadas de Claude Code (servidor, despliegue)
+CLAUDE.local.md
