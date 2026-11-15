@@ -237,8 +237,10 @@ export async function payInstallment(
   let transactionId: string | null = null;
   let entryId: string | null = null;
   if (opts.record !== false) {
-    if (i.ledger_account_id) {
-      entryId = await addEntry(db, userId, i.ledger_account_id, { date, concept, rawAmount: -i.amount });
+    // Caja del préstamo, o una caja (cash_box) indicada al pagar: movimiento negativo de esa caja.
+    const boxId = i.ledger_account_id ?? (opts.accountId && (await getAccount(db, userId, opts.accountId)).type === 'cash_box' ? opts.accountId : null);
+    if (boxId) {
+      entryId = await addEntry(db, userId, boxId, { date, concept, rawAmount: -i.amount });
     } else {
       const cat = (await db.query(`SELECT id FROM categories WHERE user_id=$1 AND name='Prestamos'`, [userId])).rows[0]?.id ?? null;
       const t = await createTransaction(db, userId, {
