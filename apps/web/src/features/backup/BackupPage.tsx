@@ -1,4 +1,4 @@
-import { Database, Download, ShieldCheck } from 'lucide-react';
+import { Database, Download, ShieldCheck, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '../../components/ui/button';
 import { useToast } from '../../components/ui';
@@ -7,6 +7,26 @@ import { useToast } from '../../components/ui';
 export function BackupPage() {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
+
+  const [file, setFile] = useState<File | null>(null);
+  const [confirmText, setConfirmText] = useState('');
+  const [restoring, setRestoring] = useState(false);
+
+  async function restore() {
+    if (!file) return;
+    setRestoring(true);
+    try {
+      const res = await fetch('/api/backup/restore?confirm=RESTAURAR', {
+        method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/zip' }, body: file,
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || 'No se pudo restaurar');
+      }
+      toast.ok('Base restaurada. Inicia sesión de nuevo…');
+      setTimeout(() => { window.location.href = '/'; }, 1500);
+    } catch (e) { toast.error(e); setRestoring(false); }
+  }
 
   async function download(endpoint = '/api/backup', fallback = 'finanzas-respaldo.json') {
     setBusy(true);
@@ -53,6 +73,25 @@ export function BackupPage() {
         <p className="mt-4 text-xs leading-relaxed text-muted-foreground">
           Atención: incluye contraseñas (hash), sesiones, conexiones de IA y los datos de todos los usuarios, y no está cifrado. Guárdalo en un lugar privado.
         </p>
+      </section>
+      <section className="rounded-2xl border border-destructive/40 bg-card p-6 shadow-sm">
+        <h2 className="!mb-2 flex items-center gap-2 text-lg"><Upload className="size-5" /> Restaurar desde un respaldo (ZIP)</h2>
+        <p className="text-sm leading-relaxed text-muted-foreground">
+          Sube el <b>.zip</b> que descargaste arriba. <b>Reemplaza TODA la base actual</b> (datos, usuarios y sesiones) por la del archivo.
+          Es todo o nada: si algo falla, la base queda como estaba. Al terminar tendrás que iniciar sesión de nuevo con la clave que tenía el respaldo.
+          Solo para el administrador. Descarga un respaldo actual antes de restaurar.
+        </p>
+        <div className="mt-4 flex flex-col gap-3">
+          <input type="file" accept=".zip,application/zip" onChange={(e) => setFile(e.target.files?.[0] ?? null)} disabled={restoring}
+            className="text-sm file:mr-3 file:rounded-md file:border file:bg-background file:px-3 file:py-1.5 file:text-sm" />
+          <label className="text-sm">Escribe <code>RESTAURAR</code> para confirmar
+            <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} disabled={restoring} autoComplete="off"
+              className="mt-1 block w-full max-w-xs rounded-md border bg-background px-3 py-1.5 text-sm" />
+          </label>
+          <div><Button variant="destructive" onClick={restore} disabled={restoring || !file || confirmText !== 'RESTAURAR'}>
+            <Upload /> {restoring ? 'Restaurando…' : 'Restaurar base'}
+          </Button></div>
+        </div>
       </section>
     </div>
   );

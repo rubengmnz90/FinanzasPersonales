@@ -21,6 +21,7 @@ import {
 import { seedCategories } from '../modules/categories/service';
 import { registerApiRoutes } from './routes';
 import { DumpError, runPgDump, safeEqual, stamp, zipDump } from '../modules/backup/dump';
+import { extractSql, MAX_ZIP, RestoreError, runPsqlRestore, validateDump } from '../modules/backup/restore';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -36,6 +37,8 @@ export interface AppOptions {
   databaseUrl?: string;
   /** Reemplaza pg_dump (pruebas). */
   dump?: () => Promise<Buffer>;
+  /** Reemplaza psql al restaurar (pruebas). */
+  restore?: (sql: Buffer) => Promise<void>;
   /** Hook para registrar rutas extra (OAuth + MCP). */
   extend?: (app: FastifyInstance, db: Db) => Promise<void> | void;
 }
@@ -148,6 +151,38 @@ export async function buildApp(db: Db, opts: AppOptions = {}): Promise<FastifyIn
       if (e instanceof DumpError) {
         console.error('[backup]', e.message);
         return reply.code(e.code === 'PG_DUMP_MISSING' ? 501 : 500).send({ error: e.code, detail: e.message });
+      }
+      throw e;
+    }
+  });
+
+  // ── restaurar desde el .zip del respaldo completo ──
+  // Solo la sesión del administrador (nunca el token: es demasiado poderoso). Reemplaza TODA la base. Exige confirm=RESTAURAR.
+  app.addContentTypeParser(['application/zip', 'application/x-zip-compressed'], { parseAs: 'buffer', bodyLimit: MAX_ZIP }, (_req, body, done) => done(null, body));
+  app.post('/api/backup/restore', { bodyLimit: MAX_ZIP }, async (req, reply) => {
+    const adminEmail = (process.env.ADMIN_EMAIL || process.env.SEED_EMAIL || '').trim().toLowerCase();
+    const u = await getSessionUser(db, req.cookies[COOKIE]);
+    if (!u) return reply.code(401).send({ error: 'UNAUTHENTICATED' });
+    if (!adminEmail || u.email.toLowerCase() !== adminEmail) {
+      return reply.code(403).send({ error: 'FORBIDDEN', detail: 'Restaurar es solo para el administrador' });
+    }
+    if (!backupLimiter.check(req.ip)) return reply.code(429).send({ error: 'TOO_MANY_ATTEMPTS' });
+    if ((req.query as { confirm?: string }).confirm !== 'RESTAURAR') {
+      return reply.code(400).send({ error: 'CONFIRM_REQUIRED', detail: 'Falta la confirmación' });
+    }
+    try {
+      const sql = extractSql(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+      validateDump(sql);
+      if (opts.restore) await opts.restore(sql);
+      else await runPsqlRestore(opts.databaseUrl ?? process.env.DATABASE_URL ?? '', sql);
+      console.warn(`[backup] base restaurada por ${u.email}`);
+      // La base entera (incluidas las sesiones) fue reemplazada: se cierra esta sesión en el navegador.
+      reply.clearCookie(COOKIE, { path: '/' });
+      return { ok: true };
+    } catch (e) {
+      if (e instanceof RestoreError) {
+        console.error('[restore]', e.code, e.message);
+        return reply.code(e.code === 'BAD_FILE' ? 400 : e.code === 'PSQL_MISSING' ? 501 : 500).send({ error: e.code, detail: e.message });
       }
       throw e;
     }

@@ -104,7 +104,7 @@ docker compose exec app ./node_modules/.bin/tsx src/import/cli.ts --file /tmp/ad
   node tools/backup-local.mjs
   ```
   Programarlo en Windows: `schtasks /Create /SC DAILY /ST 03:00 /TN FinanzasBackup /TR "cmd /c cd /d D:\Proyectos\FinanzasPersonales && node tools\backup-local.mjs"` (con las variables definidas a nivel de usuario). En Linux: una línea de `cron` equivalente.
-- **Restaurar**: descomprime y ejecuta `psql "$DATABASE_URL" -f finanzas-AAAAMMDD-HHMMSS.sql` (el dump trae `DROP ... IF EXISTS`, así que sustituye lo existente). **Seguridad**: el zip contiene todo (hashes de contraseña, sesiones, tokens, datos de todos los usuarios) y no está cifrado; trata el token y los archivos como secretos.
+- **Restaurar**: desde la app, en `/respaldo` → «Restaurar desde un respaldo (ZIP)» (solo administrador; reemplaza toda la base, es todo-o-nada y cierra la sesión). A mano: descomprime y ejecuta `psql "$DATABASE_URL" -f finanzas-AAAAMMDD-HHMMSS.sql` (el dump trae `DROP ... IF EXISTS`, así que sustituye lo existente). **Seguridad**: el zip contiene todo (hashes de contraseña, sesiones, tokens, datos de todos los usuarios) y no está cifrado; trata el token y los archivos como secretos.
 - Todo cambio queda en **Historial** (con deshacer), incluidos los de la IA.
 
 ## Conectar una IA (MCP)
