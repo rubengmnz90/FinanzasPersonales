@@ -348,11 +348,11 @@ export function registerApiRoutes(app: FastifyInstance, db: Db): void {
     return getLedger(db, uid(req), (req.params as any).id, q);
   });
   app.post('/api/accounts/:id/entries', async (req, reply) => {
-    const b = z.object({ date: D, concept: z.string(), rawAmount: Amt, tag: z.string().nullable().optional(), bucket: z.string().nullable().optional(), person: z.string().nullable().optional(), categoryId: z.string().uuid().nullable().optional(), payFromAccountId: z.string().uuid().nullable().optional(), groupKey: z.string().nullable().optional() }).parse(req.body);
+    const b = z.object({ date: D, concept: z.string(), rawAmount: Amt, tag: z.string().nullable().optional(), bucket: z.string().nullable().optional(), person: z.string().nullable().optional(), categoryId: z.string().uuid().nullable().optional(), payFromAccountId: z.string().uuid().nullable().optional(), groupKey: z.string().nullable().optional(), regularize: z.boolean().optional() }).parse(req.body);
     return reply.code(201).send({ id: await addEntry(db, uid(req), (req.params as any).id, b) });
   });
   app.patch('/api/entries/:id', async (req) => {
-    const b = z.object({ date: D, concept: z.string(), rawAmount: Amt, tag: z.string().nullable(), bucket: z.string().nullable(), person: z.string().nullable(), categoryId: z.string().uuid().nullable(), payFromAccountId: z.string().uuid().nullable(), groupKey: z.string().nullable() }).partial().parse(req.body);
+    const b = z.object({ date: D, concept: z.string(), rawAmount: Amt, tag: z.string().nullable(), bucket: z.string().nullable(), person: z.string().nullable(), categoryId: z.string().uuid().nullable(), payFromAccountId: z.string().uuid().nullable(), groupKey: z.string().nullable(), regularize: z.boolean() }).partial().parse(req.body);
     await updateEntry(db, uid(req), (req.params as any).id, b);
     return { ok: true };
   });

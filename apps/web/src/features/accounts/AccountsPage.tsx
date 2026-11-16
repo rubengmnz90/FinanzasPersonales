@@ -229,7 +229,14 @@ export function StatementView({ accounts, accountId, onAccount, asOf }: { accoun
                   <tr key={r.key}>
                     <td className="num whitespace-nowrap">{r.date}</td>
                     <td>{r.concept}</td>
-                    <td className="text-muted-foreground">{r.detail}</td>
+                    <td className="text-muted-foreground">
+                      {r.detail}
+                      {r.category && <Badge variant="info" className="ml-1">{r.category}{r.categoryGroup ? ` · ${r.categoryGroup}` : ''}</Badge>}
+                      {r.group && <Badge variant="default" className="ml-1">{r.group}</Badge>}
+                      {r.payFrom && <span className="ml-1 text-xs">paga {r.payFrom}</span>}
+                      {r.regularize === 'pending' && <Badge variant="warn" className="ml-1">por regularizar</Badge>}
+                      {r.regularize === 'done' && <Badge variant="ok" className="ml-1">regularizada</Badge>}
+                    </td>
                     <td>{r.bucket ? <Badge variant="info">{r.bucket}</Badge> : null}</td>
                     <td className="r num pos">{r.delta > 0 ? money(r.delta) : ''}</td>
                     <td className="r num neg">{r.delta < 0 ? money(-r.delta) : ''}</td>

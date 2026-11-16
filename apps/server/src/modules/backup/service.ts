@@ -8,6 +8,7 @@ const TABLES: { name: string; where: string }[] = [
   { name: 'transactions', where: 't.user_id=$1' },
   { name: 'transfers', where: 't.user_id=$1' },
   { name: 'ledger_entries', where: 't.account_id IN (SELECT id FROM accounts WHERE user_id=$1)' },
+  { name: 'entry_regularizations', where: 't.entry_id IN (SELECT e.id FROM ledger_entries e JOIN accounts a ON a.id=e.account_id WHERE a.user_id=$1)' },
   { name: 'loans', where: 't.user_id=$1' },
   { name: 'loan_installments', where: 't.loan_id IN (SELECT id FROM loans WHERE user_id=$1)' },
   { name: 'plans', where: 't.user_id=$1' },

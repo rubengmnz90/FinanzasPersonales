@@ -171,16 +171,19 @@ export async function addEntry(
     payFromAccountId?: string | null;
     /** Agrupa movimientos relacionados (compra + IVA). */
     groupKey?: string | null;
+    /** Compra de tarjeta cuyo dinero real aún no salió de una cuenta: queda por regularizar. */
+    regularize?: boolean;
   },
 ): Promise<string> {
   await getAccount(db, userId, accountId);
   await assertEntryRefs(db, userId, input.categoryId, input.payFromAccountId);
   const r = await db.query(
-    `INSERT INTO ledger_entries(account_id,date,concept,amount,tag,bucket,person,import_key,category_id,pay_from_account_id,group_key)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+    `INSERT INTO ledger_entries(account_id,date,concept,amount,tag,bucket,person,import_key,category_id,pay_from_account_id,group_key,needs_regularize)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
     [
       accountId, input.date, input.concept, parseAmount(input.rawAmount), input.tag ?? null, input.bucket ?? null, input.person?.trim() || null,
       input.importKey ?? null, input.categoryId ?? null, input.payFromAccountId ?? null, input.groupKey?.trim() || null,
+      input.regularize === true,
     ],
   );
   return r.rows[0].id;
@@ -198,6 +201,8 @@ export async function updateEntry(
   patch: Partial<{
     date: string; concept: string; rawAmount: string | number; tag: string | null; bucket: string | null; person: string | null;
     categoryId: string | null; payFromAccountId: string | null; groupKey: string | null;
+    /** true = marcar por regularizar; false = quitar la marca (no se puede si ya tiene abonos). */
+    regularize: boolean;
   }>,
 ): Promise<void> {
   const cur = (await db.query(
@@ -206,8 +211,9 @@ export async function updateEntry(
   )).rows[0];
   if (!cur) throw new NotFoundError('movimiento de cuenta');
   await assertEntryRefs(db, userId, patch.categoryId, patch.payFromAccountId);
+  const regs = Number((await db.query('SELECT COUNT(*) AS n FROM entry_regularizations WHERE entry_id=$1', [entryId])).rows[0].n);
   await db.query(
-    `UPDATE ledger_entries SET date=$2, concept=$3, amount=$4, tag=$5, bucket=$6, person=$7, category_id=$8, pay_from_account_id=$9, group_key=$10 WHERE id=$1`,
+    `UPDATE ledger_entries SET date=$2, concept=$3, amount=$4, tag=$5, bucket=$6, person=$7, category_id=$8, pay_from_account_id=$9, group_key=$10, needs_regularize=$11 WHERE id=$1`,
     [
       entryId,
       patch.date ?? cur.date,
@@ -219,6 +225,7 @@ export async function updateEntry(
       patch.categoryId === undefined ? cur.category_id : patch.categoryId,
       patch.payFromAccountId === undefined ? cur.pay_from_account_id : patch.payFromAccountId,
       patch.groupKey === undefined ? cur.group_key : patch.groupKey?.trim() || null,
+      patch.regularize === undefined ? cur.needs_regularize : patch.regularize || regs > 0, // con abonos ya hechos no se puede quitar la marca
     ],
   );
 }
@@ -309,6 +316,8 @@ export interface Balance {
   buckets: BucketBalance[];
   /** Solo ahorros: lo prestado desde el ahorro que aún no se repuso. */
   loansPending: number;
+  /** Solo tarjetas: total de compras por regularizar (pagar la tarjeta desde una cuenta). */
+  pendingRegularize: number;
   /** Solo ahorros: monto de los objetivos intocables (Aguinaldo, Vacaciones…) y lo que queda libre. */
   untouchable: number;
   touchable: number;
@@ -342,6 +351,13 @@ export async function listBalances(db: Queryable, userId: string, opts: { asOf?:
      FROM accounts a WHERE a.user_id=$1 AND a.type='savings'`,
     [userId, asOf],
   );
+  const reg = await db.query(
+    `SELECT e.account_id, SUM(GREATEST(-e.amount - COALESCE((SELECT SUM(r.amount) FROM entry_regularizations r WHERE r.entry_id=e.id),0), 0))::bigint AS s
+       FROM ledger_entries e JOIN accounts a ON a.id=e.account_id
+      WHERE a.user_id=$1 AND e.needs_regularize AND ($2::date IS NULL OR e.date <= $2) GROUP BY 1`,
+    [userId, asOf],
+  );
+  const pendingReg = new Map<string, number>(reg.rows.map((x: any) => [x.account_id, Number(x.s)]));
   const locked = new Set<string>((await db.query('SELECT name FROM savings_buckets WHERE user_id=$1 AND untouchable', [userId])).rows.map((x: any) => x.name));
   const pend = new Map<string, number>(loans.rows.map((x: any) => [x.id, Math.max(0, x.pending)]));
   return r.rows.map((x: any) => {
@@ -354,6 +370,7 @@ export async function listBalances(db: Queryable, userId: string, opts: { asOf?:
       creditLimit: acc.creditLimit, openingBalance: acc.openingBalance,
       buckets,
       loansPending: pend.get(acc.id) ?? 0,
+      pendingRegularize: pendingReg.get(acc.id) ?? 0,
       untouchable, touchable: acc.type === 'savings' ? x.balance - untouchable : 0,
     };
   });
@@ -377,6 +394,8 @@ export interface StatementRow {
   payFrom: string | null;
   /** Grupo de movimientos relacionados (compra + IVA). */
   group: string | null;
+  /** 'pending' = compra de tarjeta por regularizar (total o parcial); 'done' = ya regularizada por completo. */
+  regularize: 'pending' | 'done' | null;
 }
 
 /** Relatorio de una cuenta: saldo inicial del rango, todos sus movimientos (propios, flujo y transferencias) y saldo final. */
@@ -397,18 +416,19 @@ export async function accountStatement(
               CASE e.tag WHEN 'temp_withdrawal' THEN 'Préstamo' || COALESCE(' · ' || e.person, '')
                          WHEN 'return' THEN 'Devolución' || COALESCE(' · ' || e.person, '')
                          ELSE e.tag END AS detail,
-              e.amount AS delta, e.bucket, c.name AS category, c.group_name AS category_group, pf.name AS pay_from, e.group_key AS grp
+              e.amount AS delta, e.bucket, c.name AS category, c.group_name AS category_group, pf.name AS pay_from, e.group_key AS grp,
+              CASE WHEN e.needs_regularize THEN CASE WHEN -e.amount - COALESCE((SELECT SUM(r.amount) FROM entry_regularizations r WHERE r.entry_id=e.id),0) > 0 THEN 'pending' ELSE 'done' END END AS regularize
          FROM ledger_entries e LEFT JOIN categories c ON c.id=e.category_id LEFT JOIN accounts pf ON pf.id=e.pay_from_account_id
          WHERE e.account_id=$1
        UNION ALL
        SELECT t.date, 2, t.seq, 'flow', t.id, t.item, c.name, CASE WHEN t.kind='income' THEN t.amount ELSE -t.amount END, NULL,
-              c.name, c.group_name, NULL, NULL
+              c.name, c.group_name, NULL, NULL, NULL
          FROM transactions t LEFT JOIN categories c ON c.id=t.category_id WHERE t.account_id=$1
        UNION ALL
        SELECT x.date, 3, x.seq, 'transfer', x.id,
               CASE WHEN x.to_account_id=$1 THEN 'Desde ' || f.name ELSE 'Hacia ' || o.name END,
               CASE x.kind WHEN 'loan' THEN 'préstamo' WHEN 'repayment' THEN 'devolución' ELSE x.note END,
-              CASE WHEN x.to_account_id=$1 THEN x.amount ELSE -x.amount END, x.bucket, NULL, NULL, NULL, NULL
+              CASE WHEN x.to_account_id=$1 THEN x.amount ELSE -x.amount END, x.bucket, NULL, NULL, NULL, NULL, NULL
          FROM transfers x JOIN accounts f ON f.id=x.from_account_id JOIN accounts o ON o.id=x.to_account_id
          WHERE x.from_account_id=$1 OR x.to_account_id=$1
      ) u ORDER BY date, rank, seq`,
@@ -422,7 +442,7 @@ export async function accountStatement(
     const row: StatementRow = {
       key: `${x.source}:${x.id}`, date: x.date, source: x.source, id: x.id, concept: x.concept, detail: x.detail,
       delta: x.delta, balance: bal, bucket: x.bucket,
-      category: x.category, categoryGroup: x.category_group, payFrom: x.pay_from, group: x.grp,
+      category: x.category, categoryGroup: x.category_group, payFrom: x.pay_from, group: x.grp, regularize: x.regularize,
     };
     if (range.from && x.date < range.from) before.push(row);
     else if (!range.to || x.date <= range.to) rows.push(row);

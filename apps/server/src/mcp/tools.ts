@@ -2,12 +2,13 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InvalidAmountError, parseAmount } from '@finanzas/shared';
 import { z } from 'zod';
 import { NotFoundError, ValidationError, type Db } from '../db/client';
-import { categoryIdByName, listCategories } from '../modules/categories/service';
+import { categoryIdByName, listCategoriesWithUsage, suggestCategories } from '../modules/categories/service';
 import { createTransaction, deleteTransaction, listTransactions, updateTransaction } from '../modules/transactions/service';
 import { createPlannedExpense, listPlannedExpenses, markDone } from '../modules/planned-expenses/service';
 import { comparePlans, getPlanView, listPlans } from '../modules/plans/service';
 import { accountIdByName, accountStatement, addEntry, deleteEntry, findEntry, getAccount, listBalances, savingsOverview, updateEntry } from '../modules/ledgers/service';
 import { createTransfer, deleteTransfer, listBuckets, saveBucket } from '../modules/transfers/service';
+import { listPendingRegularization, regularize } from '../modules/regularize/service';
 import { listAudit, revertAction } from '../modules/audit/service';
 import { auditCtx } from '../db/context';
 import { createLoan, listLoans, payInstallment, unpayInstallment } from '../modules/loans/service';
@@ -63,7 +64,20 @@ export function createMcpServer(ctx: McpCtx): McpServer {
 
   tool('list_audit_log', 'finanzas:read', 'Historial de cambios (altas, ediciones y borrados) con quién los hizo, agrupados por acción. Cada acción trae su txId para poder deshacerla.', { limit: z.number().int().min(1).max(100).optional(), actor: z.enum(['ia', 'web', 'otros']).optional() }, (a) => listAudit(db, userId, { limit: a.limit ?? 20, actor: a.actor }));
   tool('revert_audit_action', 'finanzas:write', 'Deshace una acción del historial (por txId de list_audit_log): restaura lo borrado, revierte ediciones y quita lo creado. Úsalo solo si el usuario lo pidió.', { txId: z.number().int() }, (a) => revertAction(db, userId, a.txId, ctx.actor ? `${ctx.actor} (deshacer)` : 'ia (deshacer)'));
-  tool('list_categories', 'finanzas:read', 'Lista las categorías (subgrupos) y su grupo.', {}, () => listCategories(db, userId));
+  tool(
+    'list_categories',
+    'finanzas:read',
+    'Lista todos los rubros (categorías) con su tipo (Gasto, Egresos, Ingresos, Inversion, Otros), cuántas veces se usan, la última fecha y ejemplos de conceptos. Ordenados por tipo y por uso. Úsalo para elegir el `category` al registrar un gasto; si dudas, usa suggest_category.',
+    { group: z.string().optional().describe('Filtra por tipo: Gasto, Egresos, Ingresos, Inversion u Otros'), includeArchived: z.boolean().optional() },
+    (a) => listCategoriesWithUsage(db, userId, a),
+  );
+  tool(
+    'suggest_category',
+    'finanzas:read',
+    'Sugiere el rubro (category) más probable para un concepto, según tu historial de movimientos y compras de tarjeta. Devuelve hasta 5 opciones con el motivo. Si el mejor puntaje es claro, úsalo; si hay empate o ninguno, pregúntale al usuario.',
+    { text: z.string().min(2).describe('Concepto, p. ej. "Hosting", "Cerveza salida"'), kind: z.enum(['income', 'expense']).default('expense') },
+    (a) => suggestCategories(db, userId, a.text, { income: a.kind === 'income' }),
+  );
 
   tool(
     'list_transactions',
@@ -84,8 +98,8 @@ export function createMcpServer(ctx: McpCtx): McpServer {
   tool(
     'add_transaction',
     'finanzas:write',
-    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta. Si `account` es una tarjeta: un egreso es una compra y debe llevar `category` (rubro) para contar en los resúmenes por rubro en la fecha de la compra; puede llevar `payFrom` (cuenta que la pagará) y `group` (compra + IVA). Un ingreso con `payFrom` es el pago de la tarjeta: una sola transferencia que sube la tarjeta y baja esa cuenta, y no cuenta como ingreso ni egreso. Si `account` es una caja (p. ej. Vibra Lejana) o un fondo (p. ej. Ahorro Emma) se anota como movimiento de esa cuenta (ingreso suma, egreso resta; para descontar de un fondo usa un egreso, no hace falta transferencia). Lo mismo para deudas y personas que me deben. Si `account` es un ahorro (p. ej. Ahorro Coomecipar) se anota en la cuenta: un ingreso sin `bucket` es la devolución de un retiro temporal; con `bucket` es un aporte a ese objetivo; un egreso es un préstamo del ahorro (hay que devolverlo; indica `person`), salvo `extraction: true`, que es sacar tu ahorro.',
-    { date: D.optional().describe('Por defecto hoy'), item: z.string().min(1), kind: z.enum(['income', 'expense']), amount: Amt, category: z.string().optional().describe('Nombre exacto de la categoría'), account: z.string().optional().describe('Nombre de la cuenta (list_accounts)'), payer: z.string().optional().describe('Solo ingresos: quién pagó (Tellma, CBG...)'), bucket: z.string().optional().describe('Solo ahorros: objetivo del aporte o de la extracción (Ahorro, Vacaciones...)'), person: z.string().optional().describe('Solo ahorros: a quién se le prestó o quién devolvió (Osky, Charlie, Amor, Devolver en cobro...). Sin persona = préstamo normal'), extraction: z.boolean().optional().describe('Solo ahorros, egreso: true = sacaste tu ahorro (meta cumplida); no es préstamo ni hay que devolverlo'), note: z.string().optional(), payFrom: z.string().optional().describe('Solo tarjetas: cuenta desde la que se paga (GNB…). En una compra queda anotada; en un pago (ingreso) descuenta de esa cuenta en la misma operación'), group: z.string().optional().describe('Solo tarjetas: agrupa movimientos relacionados, p. ej. una compra y su IVA (Juegos nov)') },
+    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta. Si `account` es una tarjeta: un egreso es una compra y debe llevar `category` (rubro) para contar en los resúmenes por rubro en la fecha de la compra; puede llevar `payFrom` (cuenta que la pagará) y `group` (compra + IVA). Con `regularize: true` la compra queda por regularizar (ver pending_regularization y regularize). Un ingreso con `payFrom` es el pago de la tarjeta: una sola transferencia que sube la tarjeta y baja esa cuenta, y no cuenta como ingreso ni egreso. Si `account` es una caja (p. ej. Vibra Lejana) o un fondo (p. ej. Ahorro Emma) se anota como movimiento de esa cuenta (ingreso suma, egreso resta; para descontar de un fondo usa un egreso, no hace falta transferencia). Lo mismo para deudas y personas que me deben. Si `account` es un ahorro (p. ej. Ahorro Coomecipar) se anota en la cuenta: un ingreso sin `bucket` es la devolución de un retiro temporal; con `bucket` es un aporte a ese objetivo; un egreso es un préstamo del ahorro (hay que devolverlo; indica `person`), salvo `extraction: true`, que es sacar tu ahorro.',
+    { date: D.optional().describe('Por defecto hoy'), item: z.string().min(1), kind: z.enum(['income', 'expense']), amount: Amt, category: z.string().optional().describe('Nombre exacto de la categoría'), account: z.string().optional().describe('Nombre de la cuenta (list_accounts)'), payer: z.string().optional().describe('Solo ingresos: quién pagó (Tellma, CBG...)'), bucket: z.string().optional().describe('Solo ahorros: objetivo del aporte o de la extracción (Ahorro, Vacaciones...)'), person: z.string().optional().describe('Solo ahorros: a quién se le prestó o quién devolvió (Osky, Charlie, Amor, Devolver en cobro...). Sin persona = préstamo normal'), extraction: z.boolean().optional().describe('Solo ahorros, egreso: true = sacaste tu ahorro (meta cumplida); no es préstamo ni hay que devolverlo'), note: z.string().optional(), payFrom: z.string().optional().describe('Solo tarjetas: cuenta desde la que se paga (GNB…). En una compra queda anotada; en un pago (ingreso) descuenta de esa cuenta en la misma operación'), group: z.string().optional().describe('Solo tarjetas: agrupa movimientos relacionados, p. ej. una compra y su IVA (Juegos nov)'), regularize: z.boolean().optional().describe('Solo tarjetas, egreso: true = compra por regularizar (gasto del presupuesto pagado con la tarjeta; el dinero real aún no salió de una cuenta). Luego se regulariza con la herramienta regularize') },
     async (a) => {
       if (a.account) {
         const sid = await accountIdByName(db, userId, a.account);
@@ -104,13 +118,14 @@ export function createMcpServer(ctx: McpCtx): McpServer {
           if (a.category && !categoryId) throw new NotFoundError(`categoría "${a.category}" (usa list_categories)`);
           const id = await addEntry(db, userId, sid, {
             date, concept: a.item, rawAmount: a.kind === 'income' ? value : -value, categoryId, payFromAccountId: a.kind === 'expense' ? payFromId : null, groupKey: a.group ?? null,
+            regularize: a.kind === 'expense' && a.regularize === true,
           });
           const warning = a.kind === 'expense' && !categoryId
             ? 'Sin category: esta compra NO cuenta en los resúmenes por rubro. Indica category para que cuente.'
             : a.kind === 'income' && !categoryId
               ? 'Este ingreso a la tarjeta no descontó de ninguna cuenta. Si es un pago de la tarjeta, indica payFrom (p. ej. GNB).'
               : undefined;
-          return { id, account: a.account, date, concept: a.item, kind: a.kind, category: a.category ?? null, payFrom: a.kind === 'expense' ? a.payFrom ?? null : null, group: a.group ?? null, warning };
+          return { id, account: a.account, date, concept: a.item, kind: a.kind, category: a.category ?? null, payFrom: a.kind === 'expense' ? a.payFrom ?? null : null, group: a.group ?? null, regularize: a.kind === 'expense' && a.regularize === true ? 'pending' : null, warning };
         }
         if (sid && (accType === 'cash_box' || accType === 'fund' || accType === 'debt' || accType === 'receivable')) {
           // Caja (Vibra Lejana), fondo (Ahorro Emma), deuda o persona que me debe: un egreso baja el saldo, un ingreso lo sube. No toca el flujo de caja.
@@ -161,7 +176,7 @@ export function createMcpServer(ctx: McpCtx): McpServer {
     'update_transaction',
     'finanzas:write',
     'Edita un movimiento (id de list_transactions o account_statement): del flujo o de una cuenta como una tarjeta. Solo se cambian los campos indicados. En una compra de tarjeta puedes cambiar category, payFrom y group.',
-    { id: z.string().uuid(), date: D.optional(), item: z.string().optional(), kind: z.enum(['income', 'expense']).optional(), amount: Amt.optional(), category: z.string().optional(), account: z.string().optional(), payer: z.string().optional(), note: z.string().optional(), payFrom: z.string().optional().describe('Solo tarjetas'), group: z.string().optional().describe('Solo tarjetas') },
+    { id: z.string().uuid(), date: D.optional(), item: z.string().optional(), kind: z.enum(['income', 'expense']).optional(), amount: Amt.optional(), category: z.string().optional(), account: z.string().optional(), payer: z.string().optional(), note: z.string().optional(), payFrom: z.string().optional().describe('Solo tarjetas'), group: z.string().optional().describe('Solo tarjetas'), regularize: z.boolean().optional().describe('Solo tarjetas: true = marcar por regularizar, false = quitar la marca') },
     async (a) => {
       const categoryId = a.category ? await categoryIdByName(db, userId, a.category) : undefined;
       if (a.category && !categoryId) throw new NotFoundError(`categoría "${a.category}"`);
@@ -172,7 +187,7 @@ export function createMcpServer(ctx: McpCtx): McpServer {
         // El monto de una entrada lleva signo: negativo = egreso/uso, positivo = ingreso/pago.
         const negative = a.kind ? a.kind === 'expense' : entry.amount < 0;
         const rawAmount = a.amount === undefined && a.kind === undefined ? undefined : (negative ? -1 : 1) * Math.abs(a.amount === undefined ? entry.amount : parseAmount(a.amount));
-        await updateEntry(db, userId, a.id, { date: a.date, concept: a.item, rawAmount, categoryId, payFromAccountId, groupKey: a.group });
+        await updateEntry(db, userId, a.id, { date: a.date, concept: a.item, rawAmount, categoryId, payFromAccountId, groupKey: a.group, regularize: a.regularize });
         return { ok: true, id: a.id, type: 'entry' };
       }
       const accountId = a.account ? await accountIdByName(db, userId, a.account) : undefined;
@@ -185,6 +200,25 @@ export function createMcpServer(ctx: McpCtx): McpServer {
     else await deleteTransaction(db, userId, a.id);
     return { ok: true };
   });
+
+  tool(
+    'pending_regularization',
+    'finanzas:read',
+    'Cuánto falta regularizar: compras de tarjeta marcadas "por regularizar" (gastos del presupuesto pagados con la tarjeta) cuyo dinero real aún no salió de una cuenta. Devuelve cada compra con lo ya regularizado y lo que le falta, el total pendiente y el total por tarjeta.',
+    {},
+    () => listPendingRegularization(db, userId),
+  );
+  tool(
+    'regularize',
+    'finanzas:write',
+    'Regulariza pagando con una cuenta. Con `amount` paga solo ese monto, repartido de la compra más vieja a la más nueva (la última puede quedar a medias, como devolver al ahorro en el cobro); sin `amount` paga todo lo pendiente. Crea UNA transferencia cuenta → tarjeta (no cuenta como ingreso ni egreso) y deja cada abono ligado a su compra. `ids` limita a esas compras; sin `account` usa la cuenta anotada (payFrom) en cada compra. Para pagar con varias cuentas, llámalo varias veces. Borrar la transferencia (delete_transfer) deshace el abono.',
+    { account: z.string().optional().describe('Cuenta con la que se paga (GNB, Familiar…)'), amount: Amt.optional().describe('Monto a regularizar ahora; por defecto todo lo pendiente'), ids: z.array(z.string().uuid()).optional().describe('Ids de pending_regularization; por defecto todas'), date: D.optional().describe('Por defecto hoy') },
+    async (a) => {
+      const fromAccountId = a.account ? await accountIdByName(db, userId, a.account) : null;
+      if (a.account && !fromAccountId) throw new NotFoundError(`cuenta "${a.account}" (usa list_accounts)`);
+      return regularize(db, userId, { ids: a.ids, fromAccountId, amount: a.amount, date: a.date ?? new Date().toISOString().slice(0, 10) });
+    },
+  );
 
   tool('list_planned_expenses', 'finanzas:read', 'Lista gastos puntuales ("otros gastos") con fecha de pago, en un rango.', { from: D.optional(), to: D.optional(), done: z.boolean().optional() }, (a) =>
     listPlannedExpenses(db, userId, a),

@@ -69,7 +69,10 @@ const call = async (c: Client, name: string, args: Record<string, unknown> = {})
   return { isError: !!r.isError, text, json: r.isError ? null : JSON.parse(text) };
 };
 
+const prevLoginLimit = process.env.LOGIN_RATE_LIMIT;
 beforeAll(async () => {
+  // Este archivo inicia sesión muchas veces con el mismo usuario; el límite de 10/min se prueba en api.test.ts.
+  process.env.LOGIN_RATE_LIMIT = '1000';
   ctx = await makeTestDb();
   app = await buildApp(ctx.db, { extend: (a, d) => registerMcp(a, d, 'http://localhost') });
   await app.listen({ port: 0, host: '127.0.0.1' });
@@ -79,6 +82,8 @@ beforeAll(async () => {
   await mkUser('b@test.io', 'clave-b-12345');
 });
 afterAll(async () => {
+  if (prevLoginLimit === undefined) delete process.env.LOGIN_RATE_LIMIT;
+  else process.env.LOGIN_RATE_LIMIT = prevLoginLimit;
   await app.close();
   await ctx.close();
 });
@@ -277,6 +282,93 @@ describe('herramientas MCP', () => {
     }
     const accs = (await call(c, 'list_accounts', {})).json as any[];
     expect(accs.find((a) => a.name === 'Ahorro Prestamo').loansPending).toBe(0);
+    await c.close();
+  });
+
+  it('tarjeta: compras por regularizar, cuánto falta, regularizar por monto (parcial) y deshacer', async () => {
+    const cookie = await webLogin('a@test.io', 'clave-a-12345');
+    const { tokens } = await fullFlow(cookie);
+    const c = await connect(tokens.access_token);
+    await ctx.db.query(`INSERT INTO accounts(user_id,type,name,in_flow,is_default) SELECT id,'bank','GNB',true,true FROM users WHERE email='a@test.io' ON CONFLICT DO NOTHING`);
+    await ctx.db.query(`INSERT INTO accounts(user_id,type,name,credit_limit,opening_balance) SELECT id,'card','Tarjeta Reg',1000000,1000000 FROM users WHERE email='a@test.io'`);
+    await ctx.db.query(`INSERT INTO categories(user_id,name,group_name) SELECT id,'Comida','Gasto' FROM users WHERE email='a@test.io' ON CONFLICT DO NOTHING`);
+    const acc = async (n: string) => ((await call(c, 'list_accounts', {})).json as any[]).find((x) => x.name === n);
+    const gnb0 = (await acc('GNB')).balance;
+    const card0 = (await acc('Tarjeta Reg')).balance;
+
+    // Una noche de salida: 60.000 de cerveza y 30.000 de hamburguesas por regularizar, y una compra normal.
+    const a1 = await call(c, 'add_transaction', { account: 'Tarjeta Reg', kind: 'expense', item: 'Cerveza', amount: 60000, category: 'Comida', payFrom: 'GNB', regularize: true, date: '2026-12-02' });
+    expect(a1.isError).toBe(false);
+    expect(a1.json.regularize).toBe('pending');
+    await call(c, 'add_transaction', { account: 'Tarjeta Reg', kind: 'expense', item: 'Hamburguesas', amount: 30000, category: 'Comida', payFrom: 'GNB', regularize: true, date: '2026-12-02' });
+    await call(c, 'add_transaction', { account: 'Tarjeta Reg', kind: 'expense', item: 'Normal', amount: 9000, category: 'Comida', date: '2026-12-03' });
+
+    // ¿Cuánto debo regularizar?
+    let pend = (await call(c, 'pending_regularization', {})).json;
+    expect(pend.total).toBe(90000);
+    expect(pend.count).toBe(2);
+    expect((await acc('Tarjeta Reg')).pendingRegularize).toBe(90000);
+    expect((await call(c, 'monthly_summary', { year: 2026, month: 12 })).json.expense).toBe(99000); // ya cuentan como gasto
+    expect((await acc('GNB')).balance).toBe(gnb0); // el banco no se movió todavía
+
+    // Regulariza 80.000: cubre los 60.000 y 20.000 de los 30.000; quedan 10.000.
+    const reg = await call(c, 'regularize', { account: 'GNB', amount: 80000, date: '2026-12-05' });
+    expect(reg.isError).toBe(false);
+    expect(reg.json.total).toBe(80000);
+    expect(reg.json.stillPending).toBe(10000);
+    expect(reg.json.applied).toEqual([
+      expect.objectContaining({ concept: 'Cerveza', applied: 60000, remaining: 0 }),
+      expect.objectContaining({ concept: 'Hamburguesas', applied: 20000, remaining: 10000 }),
+    ]);
+    expect(reg.json.transfers).toHaveLength(1); // una sola transferencia
+    expect((await acc('GNB')).balance).toBe(gnb0 - 80000);
+    expect((await acc('Tarjeta Reg')).balance).toBe(card0 - 99000 + 80000);
+    expect((await call(c, 'monthly_summary', { year: 2026, month: 12 })).json.expense).toBe(99000); // pagar no es gastar otra vez
+    pend = (await call(c, 'pending_regularization', {})).json;
+    expect(pend.total).toBe(10000);
+    expect(pend.entries).toEqual([expect.objectContaining({ concept: 'Hamburguesas', amount: 30000, regularized: 20000, pending: 10000 })]);
+
+    // No se puede regularizar más de lo pendiente.
+    expect((await call(c, 'regularize', { account: 'GNB', amount: 10001 })).isError).toBe(true);
+
+    // Sin monto ni cuenta: paga lo que falta con la cuenta anotada (GNB).
+    const rest = await call(c, 'regularize', {});
+    expect(rest.isError).toBe(false);
+    expect(rest.json.total).toBe(10000);
+    expect((await call(c, 'pending_regularization', {})).json.total).toBe(0);
+    expect((await call(c, 'regularize', {})).isError).toBe(true);
+
+    // Borrar la transferencia de 80.000 devuelve esos abonos a pendiente.
+    await call(c, 'delete_transfer', { id: reg.json.transfers[0].id });
+    pend = (await call(c, 'pending_regularization', {})).json;
+    expect(pend.total).toBe(80000);
+    expect((await acc('GNB')).balance).toBe(gnb0 - 10000);
+    await c.close();
+  });
+
+  it('rubros: lista por tipo con uso y sugiere el rubro según el historial', async () => {
+    const cookie = await webLogin('a@test.io', 'clave-a-12345');
+    const { tokens } = await fullFlow(cookie);
+    const c = await connect(tokens.access_token);
+    await ctx.db.query(`INSERT INTO categories(user_id,name,group_name) SELECT id,v.n,v.g FROM users u CROSS JOIN (VALUES ('Bebidas','Gasto'),('Comida','Gasto'),('Honorarios','Ingresos')) AS v(n,g) WHERE u.email='a@test.io' ON CONFLICT DO NOTHING`);
+    await call(c, 'add_transaction', { item: 'Cerveza salida', kind: 'expense', amount: 40000, category: 'Bebidas', date: '2026-12-10' });
+    await call(c, 'add_transaction', { item: 'Cerveza viernes', kind: 'expense', amount: 20000, category: 'Bebidas', date: '2026-12-11' });
+    await call(c, 'add_transaction', { item: 'Almuerzo', kind: 'expense', amount: 30000, category: 'Comida', date: '2026-12-11' });
+
+    const all = (await call(c, 'list_categories', {})).json as any[];
+    const beb = all.find((x) => x.name === 'Bebidas');
+    expect(beb.uses).toBe(2);
+    expect(beb.examples).toContain('Cerveza salida');
+    expect(beb.groupName).toBe('Gasto');
+    const gasto = (await call(c, 'list_categories', { group: 'Gasto' })).json as any[];
+    expect(gasto.every((x) => x.groupName === 'Gasto')).toBe(true);
+    const usos = gasto.map((x) => x.uses);
+    expect(usos).toEqual([...usos].sort((p, q) => q - p)); // los más usados primero
+
+    const sug = (await call(c, 'suggest_category', { text: 'Cerveza con amigos' })).json as any[];
+    expect(sug[0].category).toBe('Bebidas');
+    const inc = (await call(c, 'suggest_category', { text: 'Honorarios evento', kind: 'income' })).json as any[];
+    expect(inc[0].category).toBe('Honorarios');
     await c.close();
   });
 

@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRightLeft, CreditCard, HandCoins, Lock, LockOpen, Pencil, PiggyBank, Plus, ShoppingBag, Wallet } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { get, post, put } from '../../app/api';
-import type { Balance, SavingsBucket } from '../../app/types';
+import type { Balance, Category, SavingsBucket } from '../../app/types';
 import { Combobox } from '../../components/Combobox';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -193,22 +193,37 @@ function CardsSection({ cards, onCharge, onPay, onEdit, onChanged }: {
 
 function ChargeDialog({ card, onClose, onDone }: { card: Balance | null; onClose: () => void; onDone: () => unknown }) {
   const toast = useToast();
+  const qc = useQueryClient();
+  const cats = useQuery({ queryKey: ['categories'], queryFn: () => get<Category[]>('/api/categories') });
+  const accs = useQuery({ queryKey: ['accounts'], queryFn: () => get<Balance[]>('/api/accounts') });
   const [amount, setAmount] = useState('');
   const [concept, setConcept] = useState('');
   const [date, setDate] = useState(today());
+  const [categoryId, setCategoryId] = useState('');
+  const [payFromId, setPayFromId] = useState('');
+  const [group, setGroup] = useState('');
+  const [regularize, setRegularize] = useState(false);
   const [busy, setBusy] = useState(false);
   const n = Number(amount.replace(/[.\s]/g, '').replace(',', '.'));
   const after = card && Number.isFinite(n) && n > 0 ? card.balance - n : null;
+  const catOptions = (cats.data ?? []).filter((c) => !c.archived && c.groupName !== 'Ingresos').map((c) => ({ value: c.id, label: c.name, hint: c.groupName }));
+  const payOptions = (accs.data ?? []).filter((a) => a.inFlow && !a.archived).map((a) => ({ value: a.accountId, label: a.name }));
+  // La cuenta de pago por defecto es la predeterminada del flujo (GNB).
+  const defaultPay = (accs.data ?? []).find((a) => a.inFlow && a.isDefault)?.accountId ?? '';
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!card) return;
     setBusy(true);
     try {
-      await post(`/api/accounts/${card.accountId}/entries`, { date, concept, rawAmount: `=-(${amount.trim().replace(/^=/, '')})` });
+      await post(`/api/accounts/${card.accountId}/entries`, {
+        date, concept, rawAmount: `=-(${amount.trim().replace(/^=/, '')})`,
+        categoryId: categoryId || null, payFromAccountId: payFromId || defaultPay || null, groupKey: group.trim() || null, regularize,
+      });
       await onDone();
+      await qc.invalidateQueries({ queryKey: ['transactions'] });
       toast.ok(`Compra cargada a ${card.name}`);
-      setAmount(''); setConcept(''); setDate(today());
+      setAmount(''); setConcept(''); setDate(today()); setCategoryId(''); setPayFromId(''); setGroup(''); setRegularize(false);
       onClose();
     } catch (err) { toast.error(err); } finally { setBusy(false); }
   }
@@ -218,15 +233,42 @@ function ChargeDialog({ card, onClose, onDone }: { card: Balance | null; onClose
       <DialogContent>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><ShoppingBag className="size-5" /> Cargar compra</DialogTitle>
-          <DialogDescription>Registra un gasto hecho con {card?.name}. Usa cupo y sube tu deuda.</DialogDescription>
+          <DialogDescription>Registra un gasto hecho con {card?.name}. Usa cupo y sube tu deuda. Con rubro, cuenta en tus resúmenes el día de la compra.</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="grid gap-5" aria-label="Cargar compra a la tarjeta">
           <Field label="Monto"><Input autoFocus className="num h-12 text-right text-xl" placeholder="0" value={amount} onChange={(e) => setAmount(e.target.value)} required aria-label="Monto de la compra" /></Field>
           <Field label="Concepto"><Input value={concept} onChange={(e) => setConcept(e.target.value)} placeholder="Supermercado, nafta, farmacia…" required aria-label="Concepto de la compra" /></Field>
+          <Field label="Rubro">
+            <Combobox
+              ariaLabel="Rubro de la compra"
+              value={categoryId}
+              onChange={setCategoryId}
+              options={catOptions}
+              placeholder="Buscar rubro…"
+              searchPlaceholder="Escribe para buscar…"
+              allowClear
+              onCreate={async (name) => {
+                const c = await post<Category>('/api/categories', { name, groupName: 'Gasto' });
+                await qc.invalidateQueries({ queryKey: ['categories'] });
+                setCategoryId(c.id);
+              }}
+            />
+          </Field>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field label="Se paga desde">
+              <Combobox ariaLabel="Cuenta desde la que se paga" value={payFromId || defaultPay} onChange={setPayFromId} options={payOptions} placeholder="Cuenta…" allowClear />
+            </Field>
+            <Field label="Grupo (opcional)"><Input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="Compra + IVA" aria-label="Grupo de la compra" /></Field>
+          </div>
           <Field label="Fecha"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required aria-label="Fecha de la compra" /></Field>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="checkbox" className="mt-1" checked={regularize} onChange={(e) => setRegularize(e.target.checked)} aria-label="Por regularizar" />
+            <span><b>Por regularizar</b> <span className="text-muted-foreground">— el dinero real aún no salió de una cuenta; lo pagas después y se descuenta de lo pendiente.</span></span>
+          </label>
           {card && (
             <div className="rounded-lg bg-muted/60 p-3 text-sm">
               Disponible hoy <b>{money(card.balance)}</b>{after !== null && <> → después <b className={after < 0 ? 'neg' : ''}>{money(after)}</b></>}
+              {!categoryId && <div className="mt-1 text-xs text-muted-foreground">Sin rubro: la compra no contará en los resúmenes por rubro.</div>}
             </div>
           )}
           <DialogFooter>

@@ -17,8 +17,8 @@ export interface Balance {
   balance: number; owed: number; creditLimit: number | null; openingBalance: number;
   buckets: { bucket: string; balance: number }[]; loansPending: number; untouchable: number; touchable: number;
 }
-export interface StatementRow { key: string; date: string; source: 'opening' | 'entry' | 'flow' | 'transfer'; id: string | null; concept: string; detail: string | null; delta: number; balance: number; bucket: string | null }
-export interface Statement { account: { id: string; type: AccountType; name: string; alias: string | null; creditLimit: number | null }; opening: number; closing: number; totalIn: number; totalOut: number; rows: StatementRow[] }
+export interface StatementRow { key: string; date: string; source: 'opening' | 'entry' | 'flow' | 'transfer'; id: string | null; concept: string; detail: string | null; delta: number; balance: number; bucket: string | null; category?: string | null; categoryGroup?: string | null; payFrom?: string | null; group?: string | null; regularize?: 'pending' | 'done' | null }
+export interface Statement { account: { id: string; type: AccountType; name: string; alias: string | null; creditLimit: number | null }; opening: number; closing: number; totalIn: number; totalOut: number; rows: StatementRow[]; groups?: { group: string; count: number; total: number }[] }
 export interface ExecLine { key: string; source: 'item' | 'planned'; refId: string; kind: 'income' | 'expense'; concept: string; amount: number; date: string; executed: boolean; categoryId: string | null }
 export interface ExecPreview { planId: string; planName: string; year: number; month: number; periodId: string; periodLabel: string; date: string; lines: ExecLine[] }
 export interface HealthCheck { key: string; label: string; value: number; unit: 'pyg' | 'months' | 'pct' | 'count'; status: 'ok' | 'warn' | 'bad' | 'info'; hint: string }
