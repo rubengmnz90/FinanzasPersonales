@@ -12,7 +12,7 @@ import type { Db } from '../db/client';
 import {
   addInstallment, createLoan, deleteInstallment, deleteLoan, listLoans, payInstallment, unpayInstallment, updateInstallment, updateLoan,
 } from '../modules/loans/service';
-import { GROUPS, listCategories, upsertCategory } from '../modules/categories/service';
+import { GROUPS, createCategory, deleteCategory, listCategories, listCategoriesWithUsage, updateCategory } from '../modules/categories/service';
 import {
   createTransaction,
   deleteTransaction,
@@ -121,9 +121,18 @@ export function registerApiRoutes(app: FastifyInstance, db: Db): void {
 
   // ── categorías ──
   app.get('/api/categories', async (req) => listCategories(db, uid(req)));
-  app.post('/api/categories', async (req) => {
-    const b = z.object({ id: z.string().uuid().optional(), name: z.string().min(1), groupName: z.enum(GROUPS), archived: z.boolean().optional() }).parse(req.body);
-    return upsertCategory(db, uid(req), b);
+  app.get('/api/categories/usage', async (req) => listCategoriesWithUsage(db, uid(req), { includeArchived: true }));
+  app.post('/api/categories', async (req, reply) => {
+    const b = z.object({ name: z.string().min(1), groupName: z.enum(GROUPS) }).parse(req.body);
+    return reply.code(201).send(await createCategory(db, uid(req), b));
+  });
+  app.patch('/api/categories/:id', async (req) => {
+    const b = z.object({ name: z.string().min(1), groupName: z.enum(GROUPS), archived: z.boolean() }).partial().parse(req.body);
+    return updateCategory(db, uid(req), (req.params as any).id, b);
+  });
+  app.delete('/api/categories/:id', async (req) => {
+    const b = z.object({ moveToId: z.string().uuid().optional() }).parse(req.body ?? {});
+    return deleteCategory(db, uid(req), (req.params as any).id, b);
   });
 
   // ── movimientos (flujo) ──

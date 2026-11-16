@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InvalidAmountError, parseAmount } from '@finanzas/shared';
 import { z } from 'zod';
 import { NotFoundError, ValidationError, type Db } from '../db/client';
-import { categoryIdByName, listCategoriesWithUsage, suggestCategories } from '../modules/categories/service';
+import { GROUPS, categoryIdByName, createCategory, deleteCategory, listCategoriesWithUsage, suggestCategories, updateCategory } from '../modules/categories/service';
 import { createTransaction, deleteTransaction, listTransactions, updateTransaction } from '../modules/transactions/service';
 import { createPlannedExpense, listPlannedExpenses, markDone } from '../modules/planned-expenses/service';
 import { comparePlans, getPlanView, listPlans } from '../modules/plans/service';
@@ -77,6 +77,34 @@ export function createMcpServer(ctx: McpCtx): McpServer {
     'Sugiere el rubro (category) más probable para un concepto, según tu historial de movimientos y compras de tarjeta. Devuelve hasta 5 opciones con el motivo. Si el mejor puntaje es claro, úsalo; si hay empate o ninguno, pregúntale al usuario.',
     { text: z.string().min(2).describe('Concepto, p. ej. "Hosting", "Cerveza salida"'), kind: z.enum(['income', 'expense']).default('expense') },
     (a) => suggestCategories(db, userId, a.text, { income: a.kind === 'income' }),
+  );
+
+  const Group = z.enum(GROUPS).describe('Tipo del rubro: Gasto, Egresos, Ingresos, Inversion u Otros');
+  const catId = async (name: string) => {
+    const id = await categoryIdByName(db, userId, name);
+    if (!id) throw new NotFoundError(`categoría "${name}" (usa list_categories)`);
+    return id;
+  };
+  tool(
+    'create_category',
+    'finanzas:write',
+    'Crea un rubro (categoría) nuevo con su tipo. Falla si ya existe uno con ese nombre. Luego se puede usar como `category` en add_transaction, update_transaction, etc.',
+    { name: z.string().min(1).describe('Nombre del rubro, p. ej. "Reintegros"'), group: Group },
+    (a) => createCategory(db, userId, { name: a.name, groupName: a.group }),
+  );
+  tool(
+    'update_category',
+    'finanzas:write',
+    'Edita un rubro: renombrarlo (newName), cambiar su tipo (group) o archivarlo/desarchivarlo (archived). Solo se cambian los campos indicados; los movimientos conservan su rubro.',
+    { category: z.string().describe('Nombre actual del rubro'), newName: z.string().min(1).optional(), group: Group.optional(), archived: z.boolean().optional() },
+    async (a) => updateCategory(db, userId, await catId(a.category), { name: a.newName, groupName: a.group, archived: a.archived }),
+  );
+  tool(
+    'delete_category',
+    'finanzas:write',
+    'Borra un rubro. Si tiene movimientos, indica en `moveTo` el rubro al que pasarlos (sirve también para fusionar dos rubros); si no, se rechaza (alternativa: archivarlo con update_category). Se puede deshacer desde el historial.',
+    { category: z.string(), moveTo: z.string().optional().describe('Rubro destino de los movimientos') },
+    async (a) => deleteCategory(db, userId, await catId(a.category), { moveToId: a.moveTo ? await catId(a.moveTo) : undefined }),
   );
 
   tool(

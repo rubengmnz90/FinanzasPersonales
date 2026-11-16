@@ -87,7 +87,7 @@ export function FlowPage() {
         const d = norm(draft.trim());
         if (!d) return '';
         const hit = catSearch.find((o) => norm(o.label) === d) ?? catSearch.find((o) => norm(o.label).startsWith(d)) ?? catSearch.find((o) => norm(o.label).includes(d));
-        if (!hit) throw new Error(`No hay una categoría que coincida con "${draft}"`);
+        if (!hit) throw new Error(`No hay una categoría que coincida con "${draft}". Créala en Categorías o con «+ Crear» al agregar.`);
         return hit.value;
       },
       display: (r) => isTransfer(r)

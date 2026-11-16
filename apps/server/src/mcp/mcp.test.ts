@@ -372,6 +372,40 @@ describe('herramientas MCP', () => {
     await c.close();
   });
 
+  it('rubros: crear, renombrar, archivar, fusionar y borrar', async () => {
+    const cookie = await webLogin('a@test.io', 'clave-a-12345');
+    const { tokens } = await fullFlow(cookie);
+    const c = await connect(tokens.access_token);
+    const created = await call(c, 'create_category', { name: 'Reintegros', group: 'Otros' });
+    expect(created.isError).toBe(false);
+    expect(created.json.groupName).toBe('Otros');
+    expect((await call(c, 'create_category', { name: 'reintegros', group: 'Otros' })).text).toContain('CATEGORIA_EXISTE');
+
+    await call(c, 'add_transaction', { item: 'Devolucion', kind: 'income', amount: 5000, category: 'Reintegros', date: '2026-12-12' });
+    const ren = await call(c, 'update_category', { category: 'Reintegros', newName: 'Reintegros y devoluciones', group: 'Ingresos' });
+    expect(ren.json.name).toBe('Reintegros y devoluciones');
+    expect(ren.json.groupName).toBe('Ingresos');
+    const tx = (await call(c, 'list_transactions', { category: 'Reintegros y devoluciones' })).json.rows;
+    expect(tx).toHaveLength(1); // el movimiento conserva su rubro
+
+    const arch = await call(c, 'update_category', { category: 'Reintegros y devoluciones', archived: true });
+    expect(arch.json.archived).toBe(true);
+    await call(c, 'update_category', { category: 'Reintegros y devoluciones', archived: false });
+
+    const inUse = await call(c, 'delete_category', { category: 'Reintegros y devoluciones' });
+    expect(inUse.isError).toBe(true);
+    expect(inUse.text).toContain('CATEGORIA_EN_USO');
+
+    await call(c, 'create_category', { name: 'Devoluciones', group: 'Ingresos' });
+    const merged = await call(c, 'delete_category', { category: 'Reintegros y devoluciones', moveTo: 'Devoluciones' });
+    expect(merged.json).toEqual({ deleted: true, moved: 1 });
+    expect((await call(c, 'list_transactions', { category: 'Devoluciones' })).json.rows).toHaveLength(1);
+    expect((await call(c, 'delete_category', { category: 'Devoluciones', moveTo: 'Devoluciones' })).isError).toBe(true);
+    const empty = await call(c, 'create_category', { name: 'Vacio', group: 'Gasto' });
+    expect((await call(c, 'delete_category', { category: empty.json.name })).json.deleted).toBe(true);
+    await c.close();
+  });
+
   it('un token solo de lectura no puede escribir', async () => {
     const cookie = await webLogin('a@test.io', 'clave-a-12345');
     const { tokens } = await fullFlow(cookie, ['finanzas:read']);

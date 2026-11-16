@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Banknote, BarChart3, DatabaseBackup, CalendarRange, CreditCard, FileSpreadsheet, HandCoins, History, KeyRound, Landmark, PiggyBank, LogOut, Monitor, Moon, Plug, ReceiptText, Sun, Wallet } from 'lucide-react';
+import { Banknote, BarChart3, DatabaseBackup, CalendarRange, CreditCard, FileSpreadsheet, HandCoins, History, KeyRound, Tags, Landmark, PiggyBank, LogOut, Monitor, Moon, Plug, ReceiptText, Sun, Wallet } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
 import { ApiError, get, post } from './api';
 import type { Me } from './types';
 import { cn } from '../lib/utils';
 import { AccountsPage } from '../features/accounts/AccountsPage';
+import { CategoriesPage } from '../features/categories/CategoriesPage';
 import { CardsPage, SavingsPage } from '../features/savings/CardsSavingsPage';
 import { DebtsPage } from '../features/loans/DebtsPage';
 import { HistoryPage } from '../features/history/HistoryPage';
@@ -30,6 +31,7 @@ const NAV = [
   ['/deudas', 'Deudas personales', HandCoins],
   ['/distribucion', 'Distribución', ReceiptText],
   ['/resumenes', 'Resúmenes', BarChart3],
+  ['/categorias', 'Categorías', Tags],
   ['/historial', 'Historial', History],
   ['/importar', 'Importar Excel', FileSpreadsheet],
   ['/respaldo', 'Respaldo', DatabaseBackup],
@@ -144,6 +146,7 @@ export function App() {
                     <Route path="/recuperacion" element={<Navigate to="/flujo" replace />} />
                     <Route path="/distribucion" element={<SplitsPage />} />
                     <Route path="/resumenes" element={<SummaryPage />} />
+                    <Route path="/categorias" element={<CategoriesPage />} />
                     <Route path="/respaldo" element={<BackupPage />} />
                     <Route path="/conectar" element={<ConnectPage />} />
                     <Route path="/authorize" element={<AuthorizePage />} />

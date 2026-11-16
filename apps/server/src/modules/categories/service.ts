@@ -1,5 +1,5 @@
 import type { Queryable } from '../../db/client';
-import { NotFoundError } from '../../db/client';
+import { NotFoundError, ValidationError } from '../../db/client';
 
 export const GROUPS = ['Ingresos', 'Egresos', 'Gasto', 'Inversion', 'Otros'] as const;
 export type GroupName = (typeof GROUPS)[number];
@@ -37,6 +37,71 @@ export async function upsertCategory(
     [userId, input.name, input.groupName],
   );
   return map(r.rows[0]);
+}
+
+/** Alta de un rubro nuevo. Falla si ya existe uno con ese nombre (sin distinguir mayúsculas). */
+export async function createCategory(db: Queryable, userId: string, input: { name: string; groupName: GroupName }): Promise<Category> {
+  const name = input.name.trim();
+  if (!name) throw new ValidationError('NOMBRE_VACIO', 'El rubro necesita un nombre.');
+  if (await categoryIdByName(db, userId, name)) throw new ValidationError('CATEGORIA_EXISTE', `Ya existe el rubro "${name}".`);
+  const r = await db.query('INSERT INTO categories(user_id,name,group_name) VALUES ($1,$2,$3) RETURNING *', [userId, name, input.groupName]);
+  return map(r.rows[0]);
+}
+
+/** Edita solo lo indicado: nombre, tipo (grupo) o archivado. */
+export async function updateCategory(
+  db: Queryable,
+  userId: string,
+  id: string,
+  patch: { name?: string; groupName?: GroupName; archived?: boolean },
+): Promise<Category> {
+  const name = patch.name?.trim();
+  if (patch.name !== undefined && !name) throw new ValidationError('NOMBRE_VACIO', 'El rubro necesita un nombre.');
+  if (name) {
+    const other = await categoryIdByName(db, userId, name);
+    if (other && other !== id) throw new ValidationError('CATEGORIA_EXISTE', `Ya existe el rubro "${name}".`);
+  }
+  const r = await db.query(
+    'UPDATE categories SET name=COALESCE($3,name), group_name=COALESCE($4,group_name), archived=COALESCE($5,archived) WHERE id=$1 AND user_id=$2 RETURNING *',
+    [id, userId, name ?? null, patch.groupName ?? null, patch.archived ?? null],
+  );
+  if (!r.rowCount) throw new NotFoundError('categoría');
+  return map(r.rows[0]);
+}
+
+/**
+ * Borra un rubro. Si tiene movimientos hay que decir a cuál rubro pasarlos (`moveToId`); si no, se rechaza
+ * para no dejar movimientos sin categoría (en ese caso conviene archivarlo).
+ */
+export async function deleteCategory(
+  db: Queryable,
+  userId: string,
+  id: string,
+  opts: { moveToId?: string } = {},
+): Promise<{ deleted: true; moved: number }> {
+  const own = await db.query('SELECT id,name FROM categories WHERE id=$1 AND user_id=$2', [id, userId]);
+  if (!own.rowCount) throw new NotFoundError('categoría');
+  const count = async () => Number((await db.query(
+    `SELECT (SELECT count(*) FROM transactions WHERE user_id=$2 AND category_id=$1)
+          + (SELECT count(*) FROM ledger_entries e JOIN accounts a ON a.id=e.account_id WHERE a.user_id=$2 AND e.category_id=$1) AS n`,
+    [id, userId],
+  )).rows[0].n);
+  const uses = await count();
+  if (uses > 0 && !opts.moveToId) {
+    throw new ValidationError('CATEGORIA_EN_USO', `"${own.rows[0].name}" tiene ${uses} movimiento(s). Pásalos a otro rubro (moveTo) o archívalo.`);
+  }
+  if (opts.moveToId) {
+    if (opts.moveToId === id) throw new ValidationError('CATEGORIA_DESTINO_INVALIDA', 'El rubro destino debe ser otro.');
+    const dest = await db.query('SELECT 1 FROM categories WHERE id=$1 AND user_id=$2', [opts.moveToId, userId]);
+    if (!dest.rowCount) throw new NotFoundError('categoría destino');
+    await db.query('UPDATE transactions SET category_id=$3 WHERE user_id=$2 AND category_id=$1', [id, userId, opts.moveToId]);
+    await db.query(
+      'UPDATE ledger_entries SET category_id=$3 WHERE category_id=$1 AND account_id IN (SELECT id FROM accounts WHERE user_id=$2)',
+      [id, userId, opts.moveToId],
+    );
+  }
+  await db.query('DELETE FROM categories WHERE id=$1 AND user_id=$2', [id, userId]);
+  return { deleted: true, moved: uses };
 }
 
 export async function categoryIdByName(db: Queryable, userId: string, name: string): Promise<string | null> {
