@@ -60,6 +60,7 @@ import {
 import { createTransfer, deleteTransfer, listBuckets, saveBucket, updateTransfer } from '../modules/transfers/service';
 import { executePlan, previewExecution } from '../modules/plans/execution';
 import { healthReport } from '../modules/summary/health';
+import { adviceReport } from '../modules/summary/advice';
 import {
   addAllocation,
   getRecovery,
@@ -436,5 +437,6 @@ export function registerApiRoutes(app: FastifyInstance, db: Db): void {
     return monthlySummary(db, uid(req), q.year, q.month);
   });
   app.get('/api/summary/health', async (req) => healthReport(db, uid(req), z.object({ asOf: D.optional() }).parse(req.query).asOf));
+  app.get('/api/summary/advice', async (req) => adviceReport(db, uid(req), z.object({ asOf: D.optional() }).parse(req.query).asOf));
   app.get('/api/summary/annual', async (req) => annualSummary(db, uid(req), z.coerce.number().int().parse((req.query as any).year)));
 }

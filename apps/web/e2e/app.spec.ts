@@ -458,12 +458,21 @@ test.describe.serial('app', () => {
     await login(page, NEW_PASS);
     await page.getByRole('link', { name: /Resúmenes/ }).click();
     await expect(page.getByRole('tab', { name: 'Sanidad' })).toBeVisible();
+    await page.getByRole('tab', { name: 'Sanidad' }).click();
     await expect(page.getByLabel('Puntaje')).toContainText('%');
     const items = page.getByRole('list', { name: 'Indicadores' }).getByRole('listitem');
     expect(await items.count()).toBeGreaterThanOrEqual(7);
     await expect(page.getByRole('list', { name: 'Indicadores' })).toContainText('Uso de tarjetas');
     await expect(page.getByRole('list', { name: 'Indicadores' })).toContainText('Prestado del ahorro sin reponer');
     await page.screenshot({ path: 'test-results/page-Sanidad.png', fullPage: true });
+  });
+
+  test('resúmenes: "Qué hacer" muestra recomendaciones priorizadas con pasos', async ({ page }) => {
+    await login(page, NEW_PASS);
+    await page.getByRole('link', { name: /Resúmenes/ }).click();
+    await expect(page.getByRole('tab', { name: 'Qué hacer' })).toHaveClass(/on/); // es la pestaña inicial
+    await expect(page.getByRole('status')).not.toBeEmpty();
+    await page.screenshot({ path: 'test-results/page-QueHacer.png', fullPage: true });
   });
 
   test('autorización OAuth: pantalla de consentimiento y revocación', async ({ page, request }) => {

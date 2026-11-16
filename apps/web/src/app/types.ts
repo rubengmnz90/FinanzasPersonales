@@ -28,6 +28,8 @@ export interface Health {
   asOf: string; scorePct: number; avgMonthlyIncome: number; avgMonthlyExpense: number; checks: HealthCheck[];
   summary: { liquid: number; savings: number; cardDebt: number; externalDebt: number; loansFromSavings: number; netWorth: number };
 }
+export interface Recommendation { key: string; priority: 'urgent' | 'important' | 'improve' | 'good'; title: string; why: string; steps: string[]; amount?: number; link?: { label: string; to: string } }
+export interface Advice { asOf: string; headline: string; recommendations: Recommendation[] }
 export interface Allocation { id: string; cobroIndex: number; cobroLabel: string; concept: string; amount: number; tag: 'T' | 'A' | 'V' | 'F' | null }
 export interface Recovery {
   debts: { key: 'card' | 'savings'; accountName: string | null; owed: number; paid: number; pending: number }[];

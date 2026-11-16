@@ -3,23 +3,25 @@ import { useEffect, useState } from 'react';
 import { get, qs } from '../../app/api';
 import type { PlanSummary, RangeSummary } from '../../app/types';
 import { Kpi, MONTH_NAMES, Money, RangePicker, money, type Range } from '../../components/ui';
+import { AdviceTab } from './AdviceTab';
 import { HealthTab } from './HealthTab';
 
 const y = new Date().getFullYear();
 
 export function SummaryPage() {
   const [range, setRange] = useState<Range>({ from: `${y}-01-01`, to: `${y}-12-31` });
-  const [tab, setTab] = useState<'health' | 'range' | 'annual' | 'plan'>('health');
+  const [tab, setTab] = useState<'advice' | 'health' | 'range' | 'annual' | 'plan'>('advice');
   return (
     <>
       <div className="page-head">
         <h1>Resúmenes</h1>
         <div className="chips" role="tablist">
-          {([['health', 'Sanidad'], ['range', 'Por rango'], ['annual', 'Anual por mes'], ['plan', 'Plan vs real']] as const).map(([k, l]) => (
+          {([['advice', 'Qué hacer'], ['health', 'Sanidad'], ['range', 'Por rango'], ['annual', 'Anual por mes'], ['plan', 'Plan vs real']] as const).map(([k, l]) => (
             <button key={k} role="tab" className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>
           ))}
         </div>
       </div>
+      {tab === 'advice' && <AdviceTab />}
       {tab === 'health' && <HealthTab />}
       {tab === 'range' && <RangeTab range={range} setRange={setRange} />}
       {tab === 'annual' && <AnnualTab />}

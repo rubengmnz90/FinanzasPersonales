@@ -14,6 +14,7 @@ import { auditCtx } from '../db/context';
 import { createLoan, listLoans, payInstallment, unpayInstallment } from '../modules/loans/service';
 import { executePlan, previewExecution } from '../modules/plans/execution';
 import { healthReport } from '../modules/summary/health';
+import { adviceReport } from '../modules/summary/advice';
 import { addSplitItem, createSplit, getSplit, listSplits } from '../modules/splits/service';
 import { annualSummary, monthlySummary, projectedBalance, rangeSummary } from '../modules/summary/service';
 
@@ -388,6 +389,7 @@ export function createMcpServer(ctx: McpCtx): McpServer {
     },
   );
 
+  tool('get_recommendations', 'finanzas:read', 'Recomendaciones y pasos a seguir según el estado real de las finanzas: cuentas en negativo, saldo proyectado del plan, cuotas y gastos próximos, tarjetas, colchón, ahorro mensual, rubros que se dispararon, deudas y orden de datos. Vienen priorizadas (urgent, important, improve, good) con el motivo, cifras y pasos. Úsalo cuando el usuario pregunte qué hacer, cómo mejorar o qué sigue; explícaselas con tus palabras y ofrécete a ejecutar los pasos.', { asOf: D.optional() }, (a) => adviceReport(db, userId, a.asOf));
   tool('health_report', 'finanzas:read', 'Reporte de sanidad financiera: liquidez, colchón, tarjetas, deudas, ahorro mensual, plan y orden de datos, con semáforo y puntaje.', { asOf: D.optional() }, (a) => healthReport(db, userId, a.asOf));
 
   tool('list_splits', 'finanzas:read', 'Lista los repartos de compras compartidas (supermercado).', {}, () => listSplits(db, userId));
