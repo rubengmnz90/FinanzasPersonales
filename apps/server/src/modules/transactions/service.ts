@@ -5,8 +5,8 @@ import { defaultAccountId } from '../ledgers/service';
 
 export interface TransactionRow {
   id: string;
-  /** 'tx' = ingreso/egreso del flujo; 'transfer' = movimiento entre cuentas propias. */
-  rowType: 'tx' | 'transfer';
+  /** 'tx' = ingreso/egreso del flujo; 'transfer' = movimiento entre cuentas propias; 'entry' = movimiento propio de una cuenta (tarjeta, caja, fondo…), solo al filtrar por cuenta. */
+  rowType: 'tx' | 'transfer' | 'entry';
   date: string;
   item: string;
   kind: 'income' | 'expense' | 'transfer';
@@ -63,7 +63,23 @@ export async function listTransactions(db: Queryable, userId: string, q: TxQuery
     [userId],
   );
 
+  const scope = q.accountId ?? null;
+  const en = scope
+    ? await db.query(
+        `SELECT e.*, c.name AS category_name, c.group_name, a.name AS account_name
+         FROM ledger_entries e JOIN accounts a ON a.id=e.account_id LEFT JOIN categories c ON c.id=e.category_id
+         WHERE e.account_id=$1 AND a.user_id=$2`,
+        [scope, userId],
+      )
+    : { rows: [] as any[] };
+
   const all: Raw[] = [
+    ...en.rows.map((r: any): Raw => ({
+      id: r.id, rowType: 'entry', date: r.date, item: r.concept, kind: r.amount < 0 ? 'expense' : 'income', amount: Math.abs(r.amount), amountExpr: null,
+      categoryId: r.category_id, categoryName: r.category_name, groupName: r.group_name, note: r.group_key ? `grupo: ${r.group_key}` : r.tag, payer: null,
+      accountId: r.account_id, accountName: r.account_name, toAccountId: null, toAccountName: null, bucket: r.bucket,
+      transferKind: null, at: 0, seq: Number(r.seq),
+    })),
     ...tx.rows.map((r: any): Raw => ({
       id: r.id, rowType: 'tx', date: r.date, item: r.item, kind: r.kind, amount: r.amount, amountExpr: r.amount_expr,
       categoryId: r.category_id, categoryName: r.category_name, groupName: r.group_name, note: r.note, payer: r.payer ?? null,
@@ -78,11 +94,11 @@ export async function listTransactions(db: Queryable, userId: string, q: TxQuery
     })),
   ].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.at - b.at || a.seq - b.seq));
 
-  const scope = q.accountId ?? null;
   let bal = scope
     ? Number(accs.find((a: any) => a.id === scope)?.opening_balance ?? 0)
     : accs.filter((a: any) => a.in_flow).reduce((s: number, a: any) => s + Number(a.opening_balance), 0);
   const delta = (r: Raw): number => {
+    if (r.rowType === 'entry') return (r.kind === 'income' ? 1 : -1) * r.amount;
     if (r.rowType === 'tx') {
       const sign = r.kind === 'income' ? 1 : -1;
       return scope ? (r.accountId === scope ? sign * r.amount : 0) : isLiquid(r.accountId) ? sign * r.amount : 0;

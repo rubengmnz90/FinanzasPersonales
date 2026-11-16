@@ -201,6 +201,85 @@ describe('herramientas MCP', () => {
     await c.close();
   });
 
+  it('tarjeta: la compra con rubro cuenta en el resumen, el pago es una transferencia y se puede editar y borrar', async () => {
+    const cookie = await webLogin('a@test.io', 'clave-a-12345');
+    const { tokens } = await fullFlow(cookie);
+    const c = await connect(tokens.access_token);
+    await ctx.db.query(`INSERT INTO accounts(user_id,type,name,in_flow,is_default) SELECT id,'bank','GNB',true,true FROM users WHERE email='a@test.io' ON CONFLICT DO NOTHING`);
+    await ctx.db.query(`INSERT INTO accounts(user_id,type,name,credit_limit,opening_balance) SELECT id,'card','Tarjeta Prueba',1000000,1000000 FROM users WHERE email='a@test.io'`);
+    await ctx.db.query(`INSERT INTO categories(user_id,name,group_name) SELECT id,'Juegos','Gasto' FROM users WHERE email='a@test.io' ON CONFLICT DO NOTHING`);
+    const gnb = async () => ((await call(c, 'list_accounts', {})).json as any[]).find((x) => x.name === 'GNB');
+    const card = async () => ((await call(c, 'list_accounts', {})).json as any[]).find((x) => x.name === 'Tarjeta Prueba');
+    const gnb0 = (await gnb()).balance;
+
+    // Compra + IVA en la tarjeta, con rubro, cuenta de pago y grupo.
+    const buy = await call(c, 'add_transaction', { account: 'Tarjeta Prueba', kind: 'expense', item: 'Juego', amount: 347168, category: 'Juegos', payFrom: 'GNB', group: 'Juegos sep', date: '2026-09-10' });
+    expect(buy.isError).toBe(false);
+    expect(buy.json.warning).toBeUndefined();
+    const iva = await call(c, 'add_transaction', { account: 'Tarjeta Prueba', kind: 'expense', item: 'IVA juego', amount: 34717, category: 'Juegos', payFrom: 'GNB', group: 'Juegos sep', date: '2026-09-10' });
+    // Sin rubro: avisa y no cuenta.
+    const nocat = await call(c, 'add_transaction', { account: 'Tarjeta Prueba', kind: 'expense', item: 'Sin rubro', amount: 1000, date: '2026-09-10' });
+    expect(nocat.json.warning).toContain('category');
+
+    let sum = await call(c, 'monthly_summary', { year: 2026, month: 9 });
+    expect(sum.json.expense).toBe(381885);
+    expect(sum.json.groups.find((g: any) => g.group === 'Gasto').categories).toEqual([{ name: 'Juegos', total: 381885 }]);
+    expect((await gnb()).balance).toBe(gnb0); // comprar con la tarjeta no baja el banco todavía
+
+    // Pago de la tarjeta: una sola operación, baja GNB, sube la tarjeta y no cuenta como ingreso ni egreso.
+    const before = (await card()).balance;
+    const pay = await call(c, 'add_transaction', { account: 'Tarjeta Prueba', kind: 'income', item: 'Pago tarjeta', amount: 161013, payFrom: 'GNB', date: '2026-09-20' });
+    expect(pay.isError).toBe(false);
+    expect(pay.json.type).toBe('transfer');
+    expect((await gnb()).balance).toBe(gnb0 - 161013);
+    expect((await card()).balance).toBe(before + 161013);
+    sum = await call(c, 'monthly_summary', { year: 2026, month: 9 });
+    expect(sum.json.expense).toBe(381885);
+    expect(sum.json.income).toBe(0);
+    const annual = await call(c, 'annual_summary', { year: 2026 });
+    expect(annual.json.find((r: any) => r.category === 'Juegos').total).toBe(381885);
+    const range = await call(c, 'range_summary', { from: '2026-09-01', to: '2026-09-30' });
+    expect(range.json.expense).toBe(381885);
+
+    // Grupo: subtotal compra + IVA; ids visibles en list_transactions.
+    const st = await call(c, 'account_statement', { account: 'Tarjeta Prueba' });
+    expect(st.json.groups).toEqual([{ group: 'Juegos sep', count: 2, total: -381885 }]);
+    const list = await call(c, 'list_transactions', { account: 'Tarjeta Prueba' });
+    const row = list.json.rows.find((r: any) => r.item === 'IVA juego');
+    expect(row.rowType).toBe('entry');
+
+    // Editar y borrar con las mismas herramientas que el resto.
+    const upd = await call(c, 'update_transaction', { id: row.id, amount: 30000 });
+    expect(upd.isError).toBe(false);
+    sum = await call(c, 'monthly_summary', { year: 2026, month: 9 });
+    expect(sum.json.expense).toBe(347168 + 30000);
+    expect((await call(c, 'delete_transaction', { id: row.id })).isError).toBe(false);
+    sum = await call(c, 'monthly_summary', { year: 2026, month: 9 });
+    expect(sum.json.expense).toBe(347168);
+    await c.close();
+  });
+
+  it('préstamo del ahorro y su devolución no inflan los ingresos ni los egresos', async () => {
+    const cookie = await webLogin('a@test.io', 'clave-a-12345');
+    const { tokens } = await fullFlow(cookie);
+    const c = await connect(tokens.access_token);
+    await ctx.db.query(`INSERT INTO accounts(user_id,type,name,in_flow,is_default) SELECT id,'bank','GNB',true,true FROM users WHERE email='a@test.io' ON CONFLICT DO NOTHING`);
+    await ctx.db.query(`INSERT INTO accounts(user_id,type,name) SELECT id,'savings','Ahorro Prestamo' FROM users WHERE email='a@test.io'`);
+    await call(c, 'add_transfer', { from: 'Ahorro Prestamo', to: 'GNB', amount: 850000, kind: 'loan', date: '2026-10-05' });
+    await call(c, 'add_transaction', { item: 'Honorario', kind: 'income', amount: 5000000, account: 'GNB', date: '2026-10-10' });
+    await call(c, 'add_transfer', { from: 'GNB', to: 'Ahorro Prestamo', amount: 850000, kind: 'repayment', date: '2026-10-10' });
+    for (const r of [
+      (await call(c, 'monthly_summary', { year: 2026, month: 10 })).json,
+      (await call(c, 'range_summary', { from: '2026-10-01', to: '2026-10-31' })).json,
+    ]) {
+      expect(r.income).toBe(5000000);
+      expect(r.expense).toBe(0);
+    }
+    const accs = (await call(c, 'list_accounts', {})).json as any[];
+    expect(accs.find((a) => a.name === 'Ahorro Prestamo').loansPending).toBe(0);
+    await c.close();
+  });
+
   it('un token solo de lectura no puede escribir', async () => {
     const cookie = await webLogin('a@test.io', 'clave-a-12345');
     const { tokens } = await fullFlow(cookie, ['finanzas:read']);

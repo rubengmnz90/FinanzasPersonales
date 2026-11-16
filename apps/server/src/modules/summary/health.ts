@@ -1,6 +1,7 @@
 import type { Queryable } from '../../db/client';
 import { listBalances } from '../ledgers/service';
 import { getPlanView, listPlans } from '../plans/service';
+import { REAL_FLOW_SQL } from './service';
 
 export type Status = 'ok' | 'warn' | 'bad' | 'info';
 
@@ -50,7 +51,7 @@ export async function healthReport(db: Queryable, userId: string, asOf?: string)
   const monthStart = `${at.slice(0, 7)}-01`;
   const from = addMonths(monthStart, -3);
   const rows = (await db.query(
-    `SELECT kind, SUM(amount) AS s FROM transactions t LEFT JOIN accounts a ON a.id=t.account_id
+    `SELECT kind, SUM(amount) AS s FROM (${REAL_FLOW_SQL}) t
      WHERE t.user_id=$1 AND t.date >= $2 AND t.date < $3 GROUP BY kind`,
     [userId, from, monthStart],
   )).rows;

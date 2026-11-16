@@ -2,6 +2,17 @@ import type { Queryable } from '../../db/client';
 import { getPlanView } from '../plans/service';
 import { balanceAt } from '../transactions/service';
 
+/**
+ * Ingresos y egresos reales: el flujo de caja más las compras de tarjeta que tienen rubro (cuentan en la fecha de la compra).
+ * Las transferencias (préstamos, devoluciones, pago de tarjeta) nunca entran: son movimientos internos.
+ */
+export const REAL_FLOW_SQL = `
+  SELECT user_id, date, kind, amount, category_id FROM transactions
+  UNION ALL
+  SELECT a.user_id, e.date, CASE WHEN e.amount < 0 THEN 'expense' ELSE 'income' END, ABS(e.amount), e.category_id
+    FROM ledger_entries e JOIN accounts a ON a.id=e.account_id
+    WHERE a.type='card' AND e.category_id IS NOT NULL`;
+
 export interface RangeSummary {
   from: string;
   to: string;
@@ -16,7 +27,7 @@ export async function rangeSummary(db: Queryable, userId: string, from: string, 
   const rows = (await db.query(
     `SELECT COALESCE(c.group_name,'Sin grupo') AS g, COALESCE(c.name,'Sin categoría') AS c, t.kind,
             SUM(t.amount)::bigint AS total
-     FROM transactions t LEFT JOIN categories c ON c.id=t.category_id
+     FROM (${REAL_FLOW_SQL}) t LEFT JOIN categories c ON c.id=t.category_id
      WHERE t.user_id=$1 AND t.date BETWEEN $2 AND $3
      GROUP BY 1,2,3 ORDER BY 1,2`,
     [userId, from, to],
@@ -63,7 +74,7 @@ export async function annualSummary(
     `SELECT COALESCE(c.group_name,'Sin grupo') AS g, COALESCE(c.name,'Sin categoría') AS c,
             EXTRACT(MONTH FROM t.date)::int AS m,
             SUM(CASE WHEN t.kind='income' THEN t.amount ELSE -t.amount END)::bigint AS total
-     FROM transactions t LEFT JOIN categories c ON c.id=t.category_id
+     FROM (${REAL_FLOW_SQL}) t LEFT JOIN categories c ON c.id=t.category_id
      WHERE t.user_id=$1 AND EXTRACT(YEAR FROM t.date)=$2
      GROUP BY 1,2,3`,
     [userId, year],
@@ -89,7 +100,7 @@ export async function planVsActual(
   const v = await getPlanView(db, userId, planId);
   const rows = (await db.query(
     `SELECT EXTRACT(MONTH FROM date)::int AS m, kind, SUM(amount)::bigint AS s
-     FROM transactions WHERE user_id=$1 AND EXTRACT(YEAR FROM date)=$2 GROUP BY 1,2`,
+     FROM (${REAL_FLOW_SQL}) r WHERE user_id=$1 AND EXTRACT(YEAR FROM date)=$2 GROUP BY 1,2`,
     [userId, v.plan.year],
   )).rows;
   return Array.from({ length: 12 }, (_, i) => {

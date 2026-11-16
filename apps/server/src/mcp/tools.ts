@@ -6,7 +6,7 @@ import { categoryIdByName, listCategories } from '../modules/categories/service'
 import { createTransaction, deleteTransaction, listTransactions, updateTransaction } from '../modules/transactions/service';
 import { createPlannedExpense, listPlannedExpenses, markDone } from '../modules/planned-expenses/service';
 import { comparePlans, getPlanView, listPlans } from '../modules/plans/service';
-import { accountIdByName, accountStatement, addEntry, getAccount, listBalances, savingsOverview } from '../modules/ledgers/service';
+import { accountIdByName, accountStatement, addEntry, deleteEntry, findEntry, getAccount, listBalances, savingsOverview, updateEntry } from '../modules/ledgers/service';
 import { createTransfer, deleteTransfer, listBuckets, saveBucket } from '../modules/transfers/service';
 import { listAudit, revertAction } from '../modules/audit/service';
 import { auditCtx } from '../db/context';
@@ -84,14 +84,36 @@ export function createMcpServer(ctx: McpCtx): McpServer {
   tool(
     'add_transaction',
     'finanzas:write',
-    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta. Si `account` es una tarjeta se anota como uso (egreso) o pago (ingreso) de la tarjeta. Si `account` es una caja (p. ej. Vibra Lejana) o un fondo (p. ej. Ahorro Emma) se anota como movimiento de esa cuenta (ingreso suma, egreso resta; para descontar de un fondo usa un egreso, no hace falta transferencia). Lo mismo para deudas y personas que me deben. Si `account` es un ahorro (p. ej. Ahorro Coomecipar) se anota en la cuenta: un ingreso sin `bucket` es la devolución de un retiro temporal; con `bucket` es un aporte a ese objetivo; un egreso es un préstamo del ahorro (hay que devolverlo; indica `person`), salvo `extraction: true`, que es sacar tu ahorro.',
-    { date: D.optional().describe('Por defecto hoy'), item: z.string().min(1), kind: z.enum(['income', 'expense']), amount: Amt, category: z.string().optional().describe('Nombre exacto de la categoría'), account: z.string().optional().describe('Nombre de la cuenta (list_accounts)'), payer: z.string().optional().describe('Solo ingresos: quién pagó (Tellma, CBG...)'), bucket: z.string().optional().describe('Solo ahorros: objetivo del aporte o de la extracción (Ahorro, Vacaciones...)'), person: z.string().optional().describe('Solo ahorros: a quién se le prestó o quién devolvió (Osky, Charlie, Amor, Devolver en cobro...). Sin persona = préstamo normal'), extraction: z.boolean().optional().describe('Solo ahorros, egreso: true = sacaste tu ahorro (meta cumplida); no es préstamo ni hay que devolverlo'), note: z.string().optional() },
+    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta. Si `account` es una tarjeta: un egreso es una compra y debe llevar `category` (rubro) para contar en los resúmenes por rubro en la fecha de la compra; puede llevar `payFrom` (cuenta que la pagará) y `group` (compra + IVA). Un ingreso con `payFrom` es el pago de la tarjeta: una sola transferencia que sube la tarjeta y baja esa cuenta, y no cuenta como ingreso ni egreso. Si `account` es una caja (p. ej. Vibra Lejana) o un fondo (p. ej. Ahorro Emma) se anota como movimiento de esa cuenta (ingreso suma, egreso resta; para descontar de un fondo usa un egreso, no hace falta transferencia). Lo mismo para deudas y personas que me deben. Si `account` es un ahorro (p. ej. Ahorro Coomecipar) se anota en la cuenta: un ingreso sin `bucket` es la devolución de un retiro temporal; con `bucket` es un aporte a ese objetivo; un egreso es un préstamo del ahorro (hay que devolverlo; indica `person`), salvo `extraction: true`, que es sacar tu ahorro.',
+    { date: D.optional().describe('Por defecto hoy'), item: z.string().min(1), kind: z.enum(['income', 'expense']), amount: Amt, category: z.string().optional().describe('Nombre exacto de la categoría'), account: z.string().optional().describe('Nombre de la cuenta (list_accounts)'), payer: z.string().optional().describe('Solo ingresos: quién pagó (Tellma, CBG...)'), bucket: z.string().optional().describe('Solo ahorros: objetivo del aporte o de la extracción (Ahorro, Vacaciones...)'), person: z.string().optional().describe('Solo ahorros: a quién se le prestó o quién devolvió (Osky, Charlie, Amor, Devolver en cobro...). Sin persona = préstamo normal'), extraction: z.boolean().optional().describe('Solo ahorros, egreso: true = sacaste tu ahorro (meta cumplida); no es préstamo ni hay que devolverlo'), note: z.string().optional(), payFrom: z.string().optional().describe('Solo tarjetas: cuenta desde la que se paga (GNB…). En una compra queda anotada; en un pago (ingreso) descuenta de esa cuenta en la misma operación'), group: z.string().optional().describe('Solo tarjetas: agrupa movimientos relacionados, p. ej. una compra y su IVA (Juegos nov)') },
     async (a) => {
       if (a.account) {
         const sid = await accountIdByName(db, userId, a.account);
         const accType = sid ? (await getAccount(db, userId, sid)).type : null;
-        if (sid && (accType === 'card' || accType === 'cash_box' || accType === 'fund' || accType === 'debt' || accType === 'receivable')) {
-          // Tarjeta, caja (Vibra Lejana), fondo (Ahorro Emma), deuda o persona que me debe: un egreso baja el saldo, un ingreso lo sube. No toca el flujo de caja.
+        if (sid && accType === 'card') {
+          const date = a.date ?? new Date().toISOString().slice(0, 10);
+          const value = Math.abs(parseAmount(a.amount));
+          const payFromId = a.payFrom ? await accountIdByName(db, userId, a.payFrom) : null;
+          if (a.payFrom && !payFromId) throw new NotFoundError(`cuenta "${a.payFrom}" (usa list_accounts)`);
+          if (a.kind === 'income' && payFromId) {
+            // Pago de la tarjeta: una sola transferencia que sube la tarjeta y baja la cuenta de origen. No es ingreso ni egreso.
+            const t = await createTransfer(db, userId, { date, fromAccountId: payFromId, toAccountId: sid, rawAmount: value, kind: 'transfer', note: a.item });
+            return { id: t.id, type: 'transfer', from: t.fromName, to: t.toName, date, amount: value, nota: 'Pago de tarjeta: no cuenta como ingreso ni egreso en los resúmenes.' };
+          }
+          const categoryId = a.category ? await categoryIdByName(db, userId, a.category) : null;
+          if (a.category && !categoryId) throw new NotFoundError(`categoría "${a.category}" (usa list_categories)`);
+          const id = await addEntry(db, userId, sid, {
+            date, concept: a.item, rawAmount: a.kind === 'income' ? value : -value, categoryId, payFromAccountId: a.kind === 'expense' ? payFromId : null, groupKey: a.group ?? null,
+          });
+          const warning = a.kind === 'expense' && !categoryId
+            ? 'Sin category: esta compra NO cuenta en los resúmenes por rubro. Indica category para que cuente.'
+            : a.kind === 'income' && !categoryId
+              ? 'Este ingreso a la tarjeta no descontó de ninguna cuenta. Si es un pago de la tarjeta, indica payFrom (p. ej. GNB).'
+              : undefined;
+          return { id, account: a.account, date, concept: a.item, kind: a.kind, category: a.category ?? null, payFrom: a.kind === 'expense' ? a.payFrom ?? null : null, group: a.group ?? null, warning };
+        }
+        if (sid && (accType === 'cash_box' || accType === 'fund' || accType === 'debt' || accType === 'receivable')) {
+          // Caja (Vibra Lejana), fondo (Ahorro Emma), deuda o persona que me debe: un egreso baja el saldo, un ingreso lo sube. No toca el flujo de caja.
           const date = a.date ?? new Date().toISOString().slice(0, 10);
           const value = Math.abs(parseAmount(a.amount));
           const id = await addEntry(db, userId, sid, { date, concept: a.item, rawAmount: a.kind === 'income' ? value : -value });
@@ -138,18 +160,29 @@ export function createMcpServer(ctx: McpCtx): McpServer {
   tool(
     'update_transaction',
     'finanzas:write',
-    'Edita un movimiento del flujo (id de list_transactions). Solo se cambian los campos indicados.',
-    { id: z.string().uuid(), date: D.optional(), item: z.string().optional(), kind: z.enum(['income', 'expense']).optional(), amount: Amt.optional(), category: z.string().optional(), account: z.string().optional(), payer: z.string().optional(), note: z.string().optional() },
+    'Edita un movimiento (id de list_transactions o account_statement): del flujo o de una cuenta como una tarjeta. Solo se cambian los campos indicados. En una compra de tarjeta puedes cambiar category, payFrom y group.',
+    { id: z.string().uuid(), date: D.optional(), item: z.string().optional(), kind: z.enum(['income', 'expense']).optional(), amount: Amt.optional(), category: z.string().optional(), account: z.string().optional(), payer: z.string().optional(), note: z.string().optional(), payFrom: z.string().optional().describe('Solo tarjetas'), group: z.string().optional().describe('Solo tarjetas') },
     async (a) => {
       const categoryId = a.category ? await categoryIdByName(db, userId, a.category) : undefined;
       if (a.category && !categoryId) throw new NotFoundError(`categoría "${a.category}"`);
+      const entry = await findEntry(db, userId, a.id);
+      if (entry) {
+        const payFromAccountId = a.payFrom ? await accountIdByName(db, userId, a.payFrom) : undefined;
+        if (a.payFrom && !payFromAccountId) throw new NotFoundError(`cuenta "${a.payFrom}"`);
+        // El monto de una entrada lleva signo: negativo = egreso/uso, positivo = ingreso/pago.
+        const negative = a.kind ? a.kind === 'expense' : entry.amount < 0;
+        const rawAmount = a.amount === undefined && a.kind === undefined ? undefined : (negative ? -1 : 1) * Math.abs(a.amount === undefined ? entry.amount : parseAmount(a.amount));
+        await updateEntry(db, userId, a.id, { date: a.date, concept: a.item, rawAmount, categoryId, payFromAccountId, groupKey: a.group });
+        return { ok: true, id: a.id, type: 'entry' };
+      }
       const accountId = a.account ? await accountIdByName(db, userId, a.account) : undefined;
       if (a.account && !accountId) throw new NotFoundError(`cuenta "${a.account}"`);
       return updateTransaction(db, userId, a.id, { date: a.date, item: a.item, kind: a.kind, rawAmount: a.amount, categoryId, accountId, payer: a.payer, note: a.note });
     },
   );
-  tool('delete_transaction', 'finanzas:write', 'Elimina un movimiento del flujo. Úsalo solo si el usuario lo pidió.', { id: z.string().uuid() }, async (a) => {
-    await deleteTransaction(db, userId, a.id);
+  tool('delete_transaction', 'finanzas:write', 'Elimina un movimiento (id de list_transactions o account_statement): del flujo o de una cuenta como una tarjeta. Úsalo solo si el usuario lo pidió.', { id: z.string().uuid() }, async (a) => {
+    if (await findEntry(db, userId, a.id)) await deleteEntry(db, userId, a.id);
+    else await deleteTransaction(db, userId, a.id);
     return { ok: true };
   });
 
