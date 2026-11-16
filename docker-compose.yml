@@ -29,6 +29,8 @@ services:
       SEED_EMAIL: ${SEED_EMAIL:-rubengmnz90@gmail.com}
       SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-}
       BACKUP_TOKEN: ${BACKUP_TOKEN:-}
+      # Llave para cifrar las claves del respaldo guardadas desde la app (si falta, se usa BACKUP_TOKEN)
+      SETTINGS_KEY: ${SETTINGS_KEY:-}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       # Respaldo automático a Backblaze B2 (o cualquier S3). Apagado si faltan las 4 primeras. Ver docs/respaldo-automatico.md
       BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}

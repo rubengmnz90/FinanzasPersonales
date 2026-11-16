@@ -16,33 +16,48 @@ export interface AutoBackupConfig {
 
 const num = (v: string | undefined, d: number) => (v !== undefined && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : d);
 
-/**
- * Lee la configuración del entorno. Devuelve null si falta algo (el respaldo automático queda apagado).
- * BACKUP_S3_ENDPOINT, BACKUP_S3_KEY_ID, BACKUP_S3_SECRET y BACKUP_S3_BUCKET son obligatorias.
- */
-export function autoBackupFromEnv(env: NodeJS.ProcessEnv = process.env): AutoBackupConfig | null {
-  const endpoint = env.BACKUP_S3_ENDPOINT?.trim();
-  const keyId = env.BACKUP_S3_KEY_ID?.trim();
-  const secret = env.BACKUP_S3_SECRET?.trim();
-  const bucket = env.BACKUP_S3_BUCKET?.trim();
+/** Datos para armar la configuración (vienen del entorno o de la pantalla). Vacío = valor por defecto. */
+export interface AutoBackupFields {
+  endpoint?: string; keyId?: string; secret?: string; bucket?: string; region?: string; prefix?: string;
+  hours?: string; tz?: string; sse?: string;
+  keepRecentDays?: string; keepDaily?: string; keepWeekly?: string; keepMonthly?: string;
+}
+
+/** Arma la configuración. Devuelve null si falta endpoint, keyId, secret o bucket. */
+export function buildConfig(f: AutoBackupFields): AutoBackupConfig | null {
+  const endpoint = f.endpoint?.trim();
+  const keyId = f.keyId?.trim();
+  const secret = f.secret?.trim();
+  const bucket = f.bucket?.trim();
   if (!endpoint || !keyId || !secret || !bucket) return null;
-  if (env.BACKUP_AUTO?.trim().toLowerCase() === 'false') return null;
   // Para B2 la región va en el endpoint: https://s3.us-west-004.backblazeb2.com
-  const region = env.BACKUP_S3_REGION?.trim() || /s3\.([a-z0-9-]+)\./.exec(endpoint)?.[1] || 'us-east-1';
-  const hours = (env.BACKUP_HOURS?.trim() || '0,6,12,18').split(',').map((h) => Number(h.trim())).filter((h) => Number.isInteger(h) && h >= 0 && h <= 23);
+  const region = f.region?.trim() || /s3\.([a-z0-9-]+)\./.exec(endpoint)?.[1] || 'us-east-1';
+  const hours = (f.hours?.trim() || '0,6,12,18').split(',').map((h) => Number(h.trim())).filter((h) => Number.isInteger(h) && h >= 0 && h <= 23);
+  const tz = f.tz?.trim() || DEFAULT_POLICY.tz;
+  try { new Intl.DateTimeFormat('en', { timeZone: tz }); } catch { throw new Error(`Zona horaria inválida: ${tz}`); }
   return {
-    store: new S3Store({ endpoint, region, keyId, secret, bucket, sse: env.BACKUP_S3_SSE?.trim().toLowerCase() === 'none' ? 'none' : 'AES256' }),
-    prefix: (env.BACKUP_S3_PREFIX?.trim() || 'finanzas/').replace(/^\/+/, '').replace(/\/?$/, '/'),
+    store: new S3Store({ endpoint, region, keyId, secret, bucket, sse: f.sse?.trim().toLowerCase() === 'none' ? 'none' : 'AES256' }),
+    prefix: (f.prefix?.trim() || 'finanzas/').replace(/^\/+/, '').replace(/\/?$/, '/'),
     hours: hours.length ? hours : [0, 6, 12, 18],
     policy: {
-      recentDays: num(env.BACKUP_KEEP_RECENT_DAYS, DEFAULT_POLICY.recentDays),
-      daily: num(env.BACKUP_KEEP_DAILY, DEFAULT_POLICY.daily),
-      weekly: num(env.BACKUP_KEEP_WEEKLY, DEFAULT_POLICY.weekly),
-      monthly: num(env.BACKUP_KEEP_MONTHLY, DEFAULT_POLICY.monthly),
-      tz: env.BACKUP_TZ?.trim() || DEFAULT_POLICY.tz,
+      recentDays: num(f.keepRecentDays, DEFAULT_POLICY.recentDays),
+      daily: num(f.keepDaily, DEFAULT_POLICY.daily),
+      weekly: num(f.keepWeekly, DEFAULT_POLICY.weekly),
+      monthly: num(f.keepMonthly, DEFAULT_POLICY.monthly),
+      tz,
     },
     info: { bucket, endpoint },
   };
+}
+
+/** Lee la configuración del entorno (BACKUP_S3_*). Devuelve null si falta algo o si BACKUP_AUTO=false. */
+export function autoBackupFromEnv(env: NodeJS.ProcessEnv = process.env): AutoBackupConfig | null {
+  if (env.BACKUP_AUTO?.trim().toLowerCase() === 'false') return null;
+  return buildConfig({
+    endpoint: env.BACKUP_S3_ENDPOINT, keyId: env.BACKUP_S3_KEY_ID, secret: env.BACKUP_S3_SECRET, bucket: env.BACKUP_S3_BUCKET,
+    region: env.BACKUP_S3_REGION, prefix: env.BACKUP_S3_PREFIX, hours: env.BACKUP_HOURS, tz: env.BACKUP_TZ, sse: env.BACKUP_S3_SSE,
+    keepRecentDays: env.BACKUP_KEEP_RECENT_DAYS, keepDaily: env.BACKUP_KEEP_DAILY, keepWeekly: env.BACKUP_KEEP_WEEKLY, keepMonthly: env.BACKUP_KEEP_MONTHLY,
+  });
 }
 
 export interface RunResult {
@@ -114,6 +129,7 @@ export async function listAutoCopies(cfg: AutoBackupConfig, now = new Date()): P
 
 export interface AutoBackupStatus {
   configured: boolean;
+  source?: 'app' | 'env' | null;
   running: boolean;
   bucket?: string;
   endpoint?: string;
@@ -132,18 +148,33 @@ export class AutoBackup {
   private lastSuccess: AutoBackupStatus['lastSuccess'] = null;
   private lastError: AutoBackupStatus['lastError'] = null;
 
+  /** De dónde viene la configuración activa. */
+  source: 'app' | 'env' | null = null;
+
   constructor(
-    public readonly cfg: AutoBackupConfig | null,
+    private config: AutoBackupConfig | null,
     private opts: { dump?: () => Promise<Buffer>; log?: (msg: string) => void; clock?: () => Date } = {},
   ) {}
+
+  get cfg(): AutoBackupConfig | null { return this.config; }
+
+  /** Cambia la configuración en caliente (desde la pantalla). Reinicia el estado de errores y reintentos. */
+  setConfig(cfg: AutoBackupConfig | null, source: 'app' | 'env' | null) {
+    this.config = cfg;
+    this.source = cfg ? source : null;
+    this.lastSuccess = null;
+    this.lastError = null;
+    this.retryAt = 0;
+    if (cfg) this.log(`configuración ${source === 'app' ? 'de la pantalla' : 'del entorno'}: ${cfg.info.bucket}/${cfg.prefix}`);
+  }
 
   private log(msg: string) { (this.opts.log ?? console.log)(`[respaldo-auto] ${msg}`); }
   private now() { return (this.opts.clock ?? (() => new Date()))(); }
 
   start(everyMs = 5 * 60_000, firstTickMs = 30_000) {
-    if (!this.cfg || this.timer) return;
+    if (this.timer) return;
     const c = this.cfg;
-    this.log(`activo: ${c.info.bucket}/${c.prefix}, horas ${c.hours.join(',')} (${c.policy.tz}), GFS ${c.policy.recentDays}d recientes + ${c.policy.daily} diarias + ${c.policy.weekly} semanales + ${c.policy.monthly} mensuales`);
+    if (c) this.log(`activo: ${c.info.bucket}/${c.prefix}, horas ${c.hours.join(',')} (${c.policy.tz}), GFS ${c.policy.recentDays}d recientes + ${c.policy.daily} diarias + ${c.policy.weekly} semanales + ${c.policy.monthly} mensuales`);
     setTimeout(() => void this.tick(), firstTickMs).unref();
     this.timer = setInterval(() => void this.tick(), everyMs);
     this.timer.unref();
@@ -206,7 +237,7 @@ export class AutoBackup {
   status(): AutoBackupStatus {
     const c = this.cfg;
     return {
-      configured: !!c, running: this.busy, bucket: c?.info.bucket, endpoint: c?.info.endpoint, prefix: c?.prefix, hours: c?.hours, policy: c?.policy,
+      configured: !!c, source: this.source, running: this.busy, bucket: c?.info.bucket, endpoint: c?.info.endpoint, prefix: c?.prefix, hours: c?.hours, policy: c?.policy,
       lastSuccess: this.lastSuccess, lastError: this.lastError,
     };
   }

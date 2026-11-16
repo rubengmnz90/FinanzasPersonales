@@ -1,18 +1,25 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CloudUpload, Database, Download, ShieldCheck, Upload } from 'lucide-react';
-import { useState } from 'react';
-import { get, post } from '../../app/api';
+import { useState, type FormEvent } from 'react';
+import { del, get, post, put } from '../../app/api';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { Field } from '../../components/ui/label';
 import { useToast } from '../../components/ui';
 
 interface AutoCopy { key: string; name: string; at: string; size: number; tiers: ('reciente' | 'diaria' | 'semanal' | 'mensual')[] }
 interface AutoStatus {
-  configured: boolean; running: boolean; bucket?: string; endpoint?: string; prefix?: string; hours?: number[];
+  configured: boolean; source?: 'app' | 'env' | null; running: boolean; bucket?: string; endpoint?: string; prefix?: string; hours?: number[];
   policy?: { recentDays: number; daily: number; weekly: number; monthly: number; tz: string };
   lastSuccess: { at: string; key: string; size: number; deleted: number } | null;
   lastError: { at: string; message: string } | null;
 }
+interface SavedSettings {
+  endpoint: string; bucket: string; keyIdMasked: string; hasSecret: boolean; region?: string; prefix?: string; hours?: string; tz?: string;
+  keepRecentDays?: string; keepDaily?: string; keepWeekly?: string; keepMonthly?: string;
+}
+interface AutoResponse { status: AutoStatus; copies: AutoCopy[]; copiesError: string | null; settings: SavedSettings | null; settingsError: string | null; keyAvailable: boolean }
 const TIER_LABEL = { reciente: 'reciente', diaria: 'diaria', semanal: 'semanal', mensual: 'mensual' } as const;
 const kb = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 const fmt = (iso: string, tz = 'America/Asuncion') =>
@@ -24,7 +31,7 @@ function AutoBackupSection() {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ['backup-auto'],
-    queryFn: () => get<{ status: AutoStatus; copies: AutoCopy[]; copiesError: string | null }>('/api/backup/auto'),
+    queryFn: () => get<AutoResponse>('/api/backup/auto'),
     retry: false,
     refetchInterval: (query) => (query.state.data?.status.running ? 3000 : false),
   });
@@ -46,11 +53,9 @@ function AutoBackupSection() {
       <h2 className="!mb-2 flex items-center gap-2 text-lg"><CloudUpload className="size-5" /> Respaldo automático en la nube</h2>
       {q.isError && <p className="text-sm text-muted-foreground">Esta sección es solo para el administrador.</p>}
       {st && !st.configured && (
-        <div className="text-sm leading-relaxed text-muted-foreground">
-          <p>Está <b>apagado</b>: falta conectar un almacenamiento. Crea un bucket privado en Backblaze B2 (o cualquier S3) y define en el <code>.env</code> del servidor:
-            {' '}<code>BACKUP_S3_ENDPOINT</code>, <code>BACKUP_S3_KEY_ID</code>, <code>BACKUP_S3_SECRET</code> y <code>BACKUP_S3_BUCKET</code>. La guía paso a paso está en <code>docs/respaldo-automatico.md</code>.</p>
-        </div>
+        <p className="text-sm leading-relaxed text-muted-foreground">Está <b>apagado</b>: conecta un bucket privado de Backblaze B2 (o cualquier S3) aquí abajo. Guía: <code>docs/respaldo-automatico.md</code>.</p>
       )}
+      {q.data?.settingsError && <p className="mt-3 rounded-lg border border-destructive/40 p-3 text-sm neg">{q.data.settingsError}</p>}
       {st?.configured && (
         <>
           <p className="text-sm leading-relaxed text-muted-foreground">
@@ -94,7 +99,65 @@ function AutoBackupSection() {
           </p>
         </>
       )}
+      {q.data && <ConnectForm key={q.data.settings ? 'saved' : 'new'} saved={q.data.settings} keyAvailable={q.data.keyAvailable} onDone={() => qc.invalidateQueries({ queryKey: ['backup-auto'] })} />}
     </section>
+  );
+}
+
+/** Conectar el bucket desde la app: se prueba la conexión y las claves se guardan cifradas en la base. */
+function ConnectForm({ saved, keyAvailable, onDone }: { saved: SavedSettings | null; keyAvailable: boolean; onDone: () => unknown }) {
+  const toast = useToast();
+  const [f, setF] = useState({
+    endpoint: saved?.endpoint ?? 'https://s3.us-west-004.backblazeb2.com', bucket: saved?.bucket ?? '', keyId: '', secret: '',
+    prefix: saved?.prefix ?? '', hours: saved?.hours ?? '', tz: saved?.tz ?? '',
+    keepRecentDays: saved?.keepRecentDays ?? '', keepDaily: saved?.keepDaily ?? '', keepWeekly: saved?.keepWeekly ?? '', keepMonthly: saved?.keepMonthly ?? '',
+  });
+  const [busy, setBusy] = useState(false);
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((x) => ({ ...x, [k]: e.target.value }));
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await put('/api/backup/auto/config', f);
+      toast.ok('Conexión probada y guardada (cifrada)');
+      setF((x) => ({ ...x, keyId: '', secret: '' }));
+      await onDone();
+    } catch (err) { toast.error(err); } finally { setBusy(false); }
+  }
+  async function disconnect() {
+    setBusy(true);
+    try { await del('/api/backup/auto/config'); toast.ok('Conexión quitada'); await onDone(); } catch (err) { toast.error(err); } finally { setBusy(false); }
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-4 grid gap-4 rounded-xl border p-4" aria-label="Conectar el bucket de respaldos" autoComplete="off">
+      <p className="text-sm font-medium">{saved ? 'Cambiar la conexión' : 'Conectar Backblaze B2 (o cualquier S3)'}</p>
+      {!keyAvailable && <p className="text-sm neg">El servidor no tiene una llave para cifrar. Agrega <code>SETTINGS_KEY</code> (16+ caracteres) al <code>.env</code> del servidor para poder guardar desde aquí.</p>}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Endpoint" hint="Lo muestra Backblaze en tu bucket"><Input value={f.endpoint} onChange={set('endpoint')} required placeholder="https://s3.us-west-004.backblazeb2.com" aria-label="Endpoint" /></Field>
+        <Field label="Bucket (privado)"><Input value={f.bucket} onChange={set('bucket')} required placeholder="mi-bucket-de-respaldos" aria-label="Bucket" /></Field>
+        <Field label="keyID" hint={saved ? `Guardado: ${saved.keyIdMasked}. Déjalo vacío para conservarlo` : undefined}><Input value={f.keyId} onChange={set('keyId')} required={!saved} autoComplete="off" aria-label="keyID" /></Field>
+        <Field label="applicationKey" hint={saved?.hasSecret ? 'Guardada. Déjala vacía para conservarla' : 'Se muestra una sola vez en Backblaze'}><Input type="password" value={f.secret} onChange={set('secret')} required={!saved} autoComplete="new-password" aria-label="applicationKey" /></Field>
+      </div>
+      <details className="text-sm">
+        <summary className="cursor-pointer text-muted-foreground">Opciones (horas, carpeta y cuánto conservar)</summary>
+        <div className="mt-3 grid gap-4 sm:grid-cols-3">
+          <Field label="Horas" hint="Por defecto 0,6,12,18"><Input value={f.hours} onChange={set('hours')} placeholder="0,6,12,18" aria-label="Horas" /></Field>
+          <Field label="Zona horaria" hint="Por defecto America/Asuncion"><Input value={f.tz} onChange={set('tz')} placeholder="America/Asuncion" aria-label="Zona horaria" /></Field>
+          <Field label="Carpeta" hint="Por defecto finanzas/"><Input value={f.prefix} onChange={set('prefix')} placeholder="finanzas/" aria-label="Carpeta" /></Field>
+          <Field label="Días con todas las copias" hint="Por defecto 2"><Input inputMode="numeric" value={f.keepRecentDays} onChange={set('keepRecentDays')} aria-label="Días recientes" /></Field>
+          <Field label="Días con la última de cada día" hint="Por defecto 7"><Input inputMode="numeric" value={f.keepDaily} onChange={set('keepDaily')} aria-label="Días diarias" /></Field>
+          <Field label="Semanas con una copia" hint="Por defecto 4"><Input inputMode="numeric" value={f.keepWeekly} onChange={set('keepWeekly')} aria-label="Semanas" /></Field>
+          <Field label="Meses con una copia" hint="Por defecto 12"><Input inputMode="numeric" value={f.keepMonthly} onChange={set('keepMonthly')} aria-label="Meses" /></Field>
+        </div>
+      </details>
+      <p className="text-xs leading-relaxed text-muted-foreground">Al guardar se prueba el bucket (sube, lista y borra un archivito). Las claves quedan <b>cifradas</b> en la base con una llave que solo tiene el servidor; nunca se vuelven a mostrar.</p>
+      <div className="flex flex-wrap gap-3">
+        <Button type="submit" disabled={busy || !keyAvailable}><CloudUpload /> {busy ? 'Probando…' : saved ? 'Probar y guardar cambios' : 'Probar y guardar'}</Button>
+        {saved && <Button type="button" variant="ghost" onClick={disconnect} disabled={busy}>Quitar conexión</Button>}
+      </div>
+    </form>
   );
 }
 

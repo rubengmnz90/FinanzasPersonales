@@ -22,7 +22,8 @@ import { seedCategories } from '../modules/categories/service';
 import { registerApiRoutes } from './routes';
 import { DumpError, runPgDump, safeEqual, stamp, zipDump } from '../modules/backup/dump';
 import { extractSql, MAX_ZIP, RestoreError, runPsqlRestore, validateDump } from '../modules/backup/restore';
-import { listAutoCopies, type AutoBackup } from '../modules/backup/auto';
+import { autoBackupFromEnv, listAutoCopies, type AutoBackup } from '../modules/backup/auto';
+import { clearStoredFields, loadStoredFields, mergeInput, publicView, saveStoredFields, SettingsError } from '../modules/backup/settings';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -175,7 +176,43 @@ export async function buildApp(db: Db, opts: AppOptions = {}): Promise<FastifyIn
     if (opts.autoBackup?.cfg) {
       try { copies = await listAutoCopies(opts.autoBackup.cfg); } catch (e) { copiesError = String((e as Error).message ?? e).slice(0, 200); }
     }
-    return { status, copies, copiesError };
+    let settings: ReturnType<typeof publicView> = null;
+    let settingsError: string | null = null;
+    try { settings = publicView(await loadStoredFields(db)); } catch (e) { settingsError = String((e as Error).message); }
+    const keyAvailable = !!((process.env.SETTINGS_KEY || process.env.BACKUP_TOKEN || '').trim().length >= 16);
+    return { status, copies, copiesError, settings, settingsError, keyAvailable };
+  });
+  // Guardar la conexión desde la pantalla: prueba el bucket (subir, listar y borrar un archivito) y recién entonces guarda cifrado.
+  app.put('/api/backup/auto/config', async (req, reply) => {
+    if (!(await adminOnly(req, reply))) return;
+    if (!backupLimiter.check(req.ip)) return reply.code(429).send({ error: 'TOO_MANY_ATTEMPTS' });
+    if (!opts.autoBackup) return reply.code(400).send({ error: 'NOT_AVAILABLE' });
+    try {
+      const { fields, config } = mergeInput(req.body, await loadStoredFields(db).catch(() => null));
+      const probe = `${config.prefix}.prueba-conexion`;
+      try {
+        await config.store.put(probe, Buffer.from('ok'));
+        await config.store.list(config.prefix);
+        await config.store.delete(probe);
+      } catch (e) {
+        return reply.code(400).send({ error: 'CONNECTION_FAILED', detail: `No se pudo usar el bucket: ${String((e as Error).message ?? e).slice(0, 200)}` });
+      }
+      await saveStoredFields(db, fields);
+      opts.autoBackup.setConfig(config, 'app');
+      return { ok: true, settings: publicView(fields) };
+    } catch (e) {
+      if (e instanceof SettingsError) return reply.code(400).send({ error: 'INVALID_SETTINGS', detail: e.message });
+      throw e;
+    }
+  });
+  // Quitar la conexión guardada en la app (vuelve a lo que diga el .env, si hay algo).
+  app.delete('/api/backup/auto/config', async (req, reply) => {
+    if (!(await adminOnly(req, reply))) return;
+    if (!opts.autoBackup) return reply.code(400).send({ error: 'NOT_AVAILABLE' });
+    await clearStoredFields(db);
+    const env = autoBackupFromEnv();
+    opts.autoBackup.setConfig(env, env ? 'env' : null);
+    return { ok: true };
   });
   app.post('/api/backup/auto/run', async (req, reply) => {
     if (!(await adminOnly(req, reply))) return;

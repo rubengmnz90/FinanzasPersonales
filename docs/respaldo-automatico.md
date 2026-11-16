@@ -36,9 +36,19 @@ la nueva quedó subida con el tamaño correcto. Los archivos que no se llamen co
    - Copia el **keyID** y la **applicationKey** (la clave se muestra una sola vez).
 5. En la lista de buckets copia el **Endpoint** del bucket, p. ej. `s3.us-west-004.backblazeb2.com`.
 
-## Conectarlo al servidor
+## Conectarlo desde la app (recomendado)
 
-En el `.env` del servidor (`~/finanzas/.env`, nunca se sube a git) agrega:
+Entra como administrador a **Respaldo → Respaldo automático en la nube**, completa endpoint, bucket, keyID y applicationKey, y pulsa
+**Probar y guardar**. La app sube, lista y borra un archivito de prueba; si falla, no guarda nada y te dice por qué. Si funciona, las claves
+se guardan **cifradas (AES-256-GCM)** en la base y el respaldo queda activo al instante, sin reiniciar. Las claves no se vuelven a mostrar.
+
+La llave de cifrado sale de `SETTINGS_KEY` del `.env` del servidor (o de `BACKUP_TOKEN` si no hay `SETTINGS_KEY`) y **no está en la base ni en los
+respaldos**: quien robe un `.zip` no se lleva tus claves de Backblaze. Consecuencia: si cambias esa variable tendrás que volver a escribir las claves
+(la pantalla te lo avisa), y al restaurar un respaldo en otro servidor hay que usar la misma llave.
+
+## Conectarlo por el `.env` (alternativa)
+
+Lo guardado desde la app manda sobre el `.env`. Si prefieres el `.env` del servidor (`~/finanzas/.env`, nunca se sube a git) agrega:
 
 ```env
 BACKUP_S3_ENDPOINT=https://s3.us-west-004.backblazeb2.com
