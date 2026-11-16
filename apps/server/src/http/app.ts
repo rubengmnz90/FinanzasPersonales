@@ -22,6 +22,7 @@ import { seedCategories } from '../modules/categories/service';
 import { registerApiRoutes } from './routes';
 import { DumpError, runPgDump, safeEqual, stamp, zipDump } from '../modules/backup/dump';
 import { extractSql, MAX_ZIP, RestoreError, runPsqlRestore, validateDump } from '../modules/backup/restore';
+import { listAutoCopies, type AutoBackup } from '../modules/backup/auto';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -39,6 +40,8 @@ export interface AppOptions {
   dump?: () => Promise<Buffer>;
   /** Reemplaza psql al restaurar (pruebas). */
   restore?: (sql: Buffer) => Promise<void>;
+  /** Respaldo automático a un almacenamiento externo (Backblaze B2 u otro S3). */
+  autoBackup?: AutoBackup;
   /** Hook para registrar rutas extra (OAuth + MCP). */
   extend?: (app: FastifyInstance, db: Db) => Promise<void> | void;
 }
@@ -153,6 +156,35 @@ export async function buildApp(db: Db, opts: AppOptions = {}): Promise<FastifyIn
         return reply.code(e.code === 'PG_DUMP_MISSING' ? 501 : 500).send({ error: e.code, detail: e.message });
       }
       throw e;
+    }
+  });
+
+  // ── respaldo automático a la nube (estado, copias y "respaldar ahora"); solo la sesión del administrador ──
+  async function adminOnly(req: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+    const adminEmail = (process.env.ADMIN_EMAIL || process.env.SEED_EMAIL || '').trim().toLowerCase();
+    const u = await getSessionUser(db, req.cookies[COOKIE]);
+    if (!u) { reply.code(401).send({ error: 'UNAUTHENTICATED' }); return false; }
+    if (!adminEmail || u.email.toLowerCase() !== adminEmail) { reply.code(403).send({ error: 'FORBIDDEN', detail: 'Solo para el administrador' }); return false; }
+    return true;
+  }
+  app.get('/api/backup/auto', async (req, reply) => {
+    if (!(await adminOnly(req, reply))) return;
+    const status = opts.autoBackup?.status() ?? { configured: false, running: false, lastSuccess: null, lastError: null };
+    let copies: Awaited<ReturnType<typeof listAutoCopies>> = [];
+    let copiesError: string | null = null;
+    if (opts.autoBackup?.cfg) {
+      try { copies = await listAutoCopies(opts.autoBackup.cfg); } catch (e) { copiesError = String((e as Error).message ?? e).slice(0, 200); }
+    }
+    return { status, copies, copiesError };
+  });
+  app.post('/api/backup/auto/run', async (req, reply) => {
+    if (!(await adminOnly(req, reply))) return;
+    if (!backupLimiter.check(req.ip)) return reply.code(429).send({ error: 'TOO_MANY_ATTEMPTS' });
+    if (!opts.autoBackup?.cfg) return reply.code(400).send({ error: 'NOT_CONFIGURED', detail: 'El respaldo automático no está configurado' });
+    try {
+      return await opts.autoBackup.runNow();
+    } catch (e) {
+      return reply.code(500).send({ error: 'BACKUP_FAILED', detail: String((e as Error).message ?? e).slice(0, 300) });
     }
   });
 

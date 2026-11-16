@@ -1,4 +1,5 @@
 import { exportUserData } from '../modules/backup/service';
+import { listPendingRegularization, regularize } from '../modules/regularize/service';
 import { listAudit, revertAction } from '../modules/audit/service';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -341,6 +342,14 @@ export function registerApiRoutes(app: FastifyInstance, db: Db): void {
   app.delete('/api/transfers/:id', async (req) => {
     await deleteTransfer(db, uid(req), (req.params as any).id);
     return { ok: true };
+  });
+  // ── regularizar compras de tarjeta (pagar desde una cuenta lo que se gastó con la tarjeta) ──
+  app.get('/api/regularize/pending', async (req) => listPendingRegularization(db, uid(req)));
+  app.post('/api/regularize', async (req) => {
+    const b = z.object({
+      accountId: z.string().uuid().nullable().optional(), amount: Amt.nullable().optional(), ids: z.array(z.string().uuid()).optional(), date: D.optional(),
+    }).parse(req.body ?? {});
+    return regularize(db, uid(req), { ids: b.ids, fromAccountId: b.accountId ?? null, amount: b.amount ?? null, date: b.date ?? new Date().toISOString().slice(0, 10) });
   });
   app.get('/api/accounts/list', async (req) => listAccounts(db, uid(req)));
   app.get('/api/accounts/:id', async (req) => {

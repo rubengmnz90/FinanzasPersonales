@@ -15,8 +15,10 @@ export interface PlanSummary { id: string; year: number; name: string }
 export interface Balance {
   accountId: string; type: AccountType; name: string; alias: string | null; institution: string | null; counterparty: string | null; isDefault: boolean; archived: boolean; inFlow: boolean;
   balance: number; owed: number; creditLimit: number | null; openingBalance: number;
-  buckets: { bucket: string; balance: number }[]; loansPending: number; untouchable: number; touchable: number;
+  buckets: { bucket: string; balance: number }[]; loansPending: number; untouchable: number; touchable: number; pendingRegularize?: number;
 }
+export interface PendingEntry { id: string; date: string; concept: string; amount: number; regularized: number; pending: number; card: string; cardId: string; category: string | null; group: string | null; payFrom: string | null }
+export interface PendingRegularization { total: number; count: number; entries: PendingEntry[]; byCard: { card: string; total: number; count: number }[] }
 export interface StatementRow { key: string; date: string; source: 'opening' | 'entry' | 'flow' | 'transfer'; id: string | null; concept: string; detail: string | null; delta: number; balance: number; bucket: string | null; category?: string | null; categoryGroup?: string | null; payFrom?: string | null; group?: string | null; regularize?: 'pending' | 'done' | null }
 export interface Statement { account: { id: string; type: AccountType; name: string; alias: string | null; creditLimit: number | null }; opening: number; closing: number; totalIn: number; totalOut: number; rows: StatementRow[]; groups?: { group: string; count: number; total: number }[] }
 export interface ExecLine { key: string; source: 'item' | 'planned'; refId: string; kind: 'income' | 'expense'; concept: string; amount: number; date: string; executed: boolean; categoryId: string | null }

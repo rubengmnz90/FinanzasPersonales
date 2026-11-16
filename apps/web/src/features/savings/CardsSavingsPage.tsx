@@ -1,8 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRightLeft, CreditCard, HandCoins, Lock, LockOpen, Pencil, PiggyBank, Plus, ShoppingBag, Wallet } from 'lucide-react';
+import { ArrowRightLeft, CreditCard, HandCoins, Lock, LockOpen, Pencil, PiggyBank, Plus, Scale, ShoppingBag, Wallet } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { get, post, put } from '../../app/api';
-import type { Balance, Category, SavingsBucket } from '../../app/types';
+import type { Balance, Category, PendingRegularization, SavingsBucket } from '../../app/types';
 import { Combobox } from '../../components/Combobox';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -48,6 +48,7 @@ function useKit() {
 export function CardsPage() {
   const k = useKit();
   const [charging, setCharging] = useState<Balance | null>(null);
+  const [regularizing, setRegularizing] = useState<Balance | null>(null);
   const cards = k.list.filter((a) => a.type === 'card');
   const cardDebt = cards.reduce((s, a) => s + a.owed, 0);
   const cardLimit = cards.reduce((s, a) => s + (a.creditLimit ?? 0), 0);
@@ -70,9 +71,10 @@ export function CardsPage() {
         <Kpi label="Cupo disponible" value={<Money v={cardAvail} />} tone="pos" sub={cardLimit ? `de ${money(cardLimit)} en total` : undefined} />
       </div>
       {cards.length ? (
-        <CardsSection cards={cards} onCharge={setCharging} onPay={(a) => k.openTransfer({ mode: 'transfer', to: a.accountId })} onEdit={k.setEditing} onChanged={k.refresh} />
+        <CardsSection cards={cards} onCharge={setCharging} onRegularize={setRegularizing} onPay={(a) => k.openTransfer({ mode: 'transfer', to: a.accountId })} onEdit={k.setEditing} onChanged={k.refresh} />
       ) : <Empty>No tienes tarjetas cargadas. Crea una con “Nueva tarjeta”.</Empty>}
       <ChargeDialog card={charging} onClose={() => setCharging(null)} onDone={k.refresh} />
+      <RegularizeDialog card={regularizing} onClose={() => setRegularizing(null)} onDone={k.refresh} />
       {k.dialogs}
     </div>
   );
@@ -129,8 +131,8 @@ export function SavingsPage() {
 }
 
 // ── Tarjetas ──
-function CardsSection({ cards, onCharge, onPay, onEdit, onChanged }: {
-  cards: Balance[]; onCharge: (a: Balance) => void; onPay: (a: Balance) => void; onEdit: (a: Balance) => void; onChanged: () => unknown;
+function CardsSection({ cards, onCharge, onRegularize, onPay, onEdit, onChanged }: {
+  cards: Balance[]; onCharge: (a: Balance) => void; onRegularize: (a: Balance) => void; onPay: (a: Balance) => void; onEdit: (a: Balance) => void; onChanged: () => unknown;
 }) {
   const toast = useToast();
   const [selId, setSelId] = useState(cards[0].accountId);
@@ -167,9 +169,11 @@ function CardsSection({ cards, onCharge, onPay, onEdit, onChanged }: {
           <div>
             <h2 className="!mb-1 text-lg">{sel.name}</h2>
             <p className="text-sm text-muted-foreground">Debes <b className="neg">{money(sel.owed)}</b> · disponible <b>{money(sel.balance)}</b> de {money(sel.creditLimit)}</p>
+            {(sel.pendingRegularize ?? 0) > 0 && <p className="mt-1 text-sm">Por regularizar <b className="neg">{money(sel.pendingRegularize)}</b> <span className="text-muted-foreground">(gastado con la tarjeta, aún sin pagar desde una cuenta)</span></p>}
           </div>
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => onCharge(sel)}><ShoppingBag /> Cargar compra</Button>
+            {(sel.pendingRegularize ?? 0) > 0 && <Button variant="outline" onClick={() => onRegularize(sel)}><Scale /> Regularizar</Button>}
             <Button variant="outline" onClick={() => onPay(sel)}><Wallet /> Pagar tarjeta</Button>
             <Button variant="ghost" onClick={() => onEdit(sel)}><Pencil /> Editar</Button>
           </div>
@@ -274,6 +278,95 @@ function ChargeDialog({ card, onClose, onDone }: { card: Balance | null; onClose
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
             <Button type="submit" disabled={busy}>Cargar compra</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Reparte `amount` de la compra más vieja a la más nueva (igual que el servidor), para mostrar la vista previa. */
+function allocate(entries: PendingRegularization['entries'], amount: number) {
+  let left = amount;
+  return entries.map((e) => {
+    const take = Math.max(0, Math.min(left, e.pending));
+    left -= take;
+    return { e, take, remaining: e.pending - take };
+  });
+}
+
+function RegularizeDialog({ card, onClose, onDone }: { card: Balance | null; onClose: () => void; onDone: () => unknown }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const pending = useQuery({ queryKey: ['regularize', 'pending'], enabled: !!card, queryFn: () => get<PendingRegularization>('/api/regularize/pending') });
+  const accs = useQuery({ queryKey: ['accounts'], queryFn: () => get<Balance[]>('/api/accounts') });
+  const [amount, setAmount] = useState('');
+  const [accountId, setAccountId] = useState('');
+  const [date, setDate] = useState(today());
+  const [busy, setBusy] = useState(false);
+
+  const entries = (pending.data?.entries ?? []).filter((e) => e.cardId === card?.accountId);
+  const total = entries.reduce((s, e) => s + e.pending, 0);
+  const n = amount.trim() ? Number(amount.replace(/[.\s]/g, '').replace(',', '.')) : total;
+  const valid = Number.isFinite(n) && n > 0 && n <= total;
+  const plan = valid ? allocate(entries, n) : [];
+  const payOptions = (accs.data ?? []).filter((a) => a.inFlow && !a.archived).map((a) => ({ value: a.accountId, label: a.name }));
+  const defaultPay = (accs.data ?? []).find((a) => a.inFlow && a.isDefault)?.accountId ?? '';
+  const from = accountId || defaultPay;
+  const fromName = payOptions.find((o) => o.value === from)?.label;
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!card || !valid || !from) return;
+    setBusy(true);
+    try {
+      await post('/api/regularize', { accountId: from, amount: amount.trim() ? amount.trim() : null, ids: entries.map((x) => x.id), date });
+      await onDone();
+      await Promise.all(['regularize', 'transactions', 'statement'].map((k) => qc.invalidateQueries({ queryKey: [k] })));
+      toast.ok(`Regularizado ${money(n)} con ${fromName}`);
+      setAmount('');
+      onClose();
+    } catch (err) { toast.error(err); } finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open={!!card} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><Scale className="size-5" /> Regularizar {card?.name}</DialogTitle>
+          <DialogDescription>Paga con una cuenta lo que gastaste con la tarjeta. Puedes pagar todo o una parte: se cubre de la compra más vieja a la más nueva y la última puede quedar a medias.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="grid gap-5" aria-label="Regularizar compras de la tarjeta">
+          <div className="rounded-lg bg-muted/60 p-3 text-sm">Falta regularizar <b className="neg">{money(total)}</b> en {entries.length} compra{entries.length === 1 ? '' : 's'}.</div>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field label="Monto a regularizar ahora"><Input className="num text-right" placeholder={`${total} (todo)`} value={amount} onChange={(e) => setAmount(e.target.value)} aria-label="Monto a regularizar" /></Field>
+            <Field label="Pagar con"><Combobox ariaLabel="Cuenta con la que se paga" value={from} onChange={setAccountId} options={payOptions} placeholder="Cuenta…" /></Field>
+          </div>
+          <Field label="Fecha"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required aria-label="Fecha del pago" /></Field>
+          <div className="max-h-56 overflow-y-auto rounded-lg border">
+            <table className="simple">
+              <thead><tr><th>Compra</th><th className="r">Pendiente</th><th className="r">Pago</th><th className="r">Queda</th></tr></thead>
+              <tbody>
+                {entries.map((e, i) => {
+                  const p = plan[i];
+                  return (
+                    <tr key={e.id}>
+                      <td>{e.concept} <span className="text-xs text-muted-foreground">{e.date}</span></td>
+                      <td className="r num">{money(e.pending)}</td>
+                      <td className="r num pos">{p && p.take > 0 ? money(p.take) : ''}</td>
+                      <td className="r num">{p ? money(p.remaining) : money(e.pending)}</td>
+                    </tr>
+                  );
+                })}
+                {!entries.length && <tr><td colSpan={4} className="empty">No hay compras por regularizar en esta tarjeta.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          {amount.trim() && !valid && <p className="text-sm neg">El monto debe ser mayor a cero y no pasar de {money(total)}.</p>}
+          {valid && from && <p className="text-sm text-muted-foreground">Se hará <b>una transferencia</b> de {fromName} → {card?.name} por <b>{money(n)}</b>. Quedan por regularizar <b>{money(total - n)}</b>.</p>}
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={onClose}>Cancelar</Button>
+            <Button type="submit" disabled={busy || !valid || !from}>Regularizar {valid ? money(n) : ''}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

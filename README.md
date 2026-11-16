@@ -95,6 +95,7 @@ docker compose exec app ./node_modules/.bin/tsx src/import/cli.ts --file /tmp/ad
 - Cambia `POSTGRES_PASSWORD` y `SEED_USER_PASSWORD` (no dejes `12345`) y no subas `.env`.
 - Mantén `ALLOW_SIGNUP=false`.
 - Respaldo: en la app, menú **Respaldo > Descargar respaldo** (JSON con tus datos). También `./deploy.sh backup` hace un `pg_dump` manual en `./backups` del servidor.
+- **Respaldo automático en la nube**: 4 copias al día a Backblaze B2 (u otro S3) con retención GFS. Apagado hasta definir `BACKUP_S3_*`; guía en [docs/respaldo-automatico.md](docs/respaldo-automatico.md).
 - **Respaldo completo (dump real) por API**: `GET /api/backup/full` devuelve un `.zip` con el `pg_dump` de toda la base (el servidor no guarda copias). Se autoriza con `Authorization: Bearer <BACKUP_TOKEN>` (variable del `.env`; `deploy.sh` la genera y puedes verla con `grep BACKUP_TOKEN .env`) o con la sesión del administrador (`ADMIN_EMAIL`, por defecto `SEED_EMAIL`), y desde la app con **Respaldo > Descargar dump completo**. Requiere `pg_dump` en la imagen (el `Dockerfile` instala el cliente v16, misma versión que `postgres:16`; si cambias la base, cambia `PG_CLIENT_VERSION`). Tras actualizar hay que reconstruir la imagen (`./deploy.sh`).
 - **Rutina en tu PC**: `tools/backup-local.mjs` (Node 18+, sin dependencias) baja el zip a una carpeta y conserva los últimos `KEEP`:
   ```
