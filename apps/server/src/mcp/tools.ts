@@ -84,14 +84,14 @@ export function createMcpServer(ctx: McpCtx): McpServer {
   tool(
     'add_transaction',
     'finanzas:write',
-    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta. Si `account` es una tarjeta se anota como uso (egreso) o pago (ingreso) de la tarjeta. Si `account` es una caja (p. ej. Vibra Lejana) se anota como movimiento de esa caja (ingreso suma, egreso resta). Si `account` es un ahorro (p. ej. Ahorro Coomecipar) se anota en la cuenta: un ingreso sin `bucket` es la devolución de un retiro temporal; con `bucket` es un aporte a ese objetivo; un egreso es un préstamo del ahorro (hay que devolverlo; indica `person`), salvo `extraction: true`, que es sacar tu ahorro.',
+    'Registra un ingreso o egreso en el flujo de caja. Por defecto sale de la cuenta GNB; indica `account` para otro banco, efectivo o tarjeta. Si `account` es una tarjeta se anota como uso (egreso) o pago (ingreso) de la tarjeta. Si `account` es una caja (p. ej. Vibra Lejana) o un fondo (p. ej. Ahorro Emma) se anota como movimiento de esa cuenta (ingreso suma, egreso resta; para descontar de un fondo usa un egreso, no hace falta transferencia). Lo mismo para deudas y personas que me deben. Si `account` es un ahorro (p. ej. Ahorro Coomecipar) se anota en la cuenta: un ingreso sin `bucket` es la devolución de un retiro temporal; con `bucket` es un aporte a ese objetivo; un egreso es un préstamo del ahorro (hay que devolverlo; indica `person`), salvo `extraction: true`, que es sacar tu ahorro.',
     { date: D.optional().describe('Por defecto hoy'), item: z.string().min(1), kind: z.enum(['income', 'expense']), amount: Amt, category: z.string().optional().describe('Nombre exacto de la categoría'), account: z.string().optional().describe('Nombre de la cuenta (list_accounts)'), payer: z.string().optional().describe('Solo ingresos: quién pagó (Tellma, CBG...)'), bucket: z.string().optional().describe('Solo ahorros: objetivo del aporte o de la extracción (Ahorro, Vacaciones...)'), person: z.string().optional().describe('Solo ahorros: a quién se le prestó o quién devolvió (Osky, Charlie, Amor, Devolver en cobro...). Sin persona = préstamo normal'), extraction: z.boolean().optional().describe('Solo ahorros, egreso: true = sacaste tu ahorro (meta cumplida); no es préstamo ni hay que devolverlo'), note: z.string().optional() },
     async (a) => {
       if (a.account) {
         const sid = await accountIdByName(db, userId, a.account);
         const accType = sid ? (await getAccount(db, userId, sid)).type : null;
-        if (sid && (accType === 'card' || accType === 'cash_box')) {
-          // Tarjeta o caja (Vibra Lejana): un egreso baja el saldo/disponible, un ingreso lo sube. No toca el flujo de caja.
+        if (sid && (accType === 'card' || accType === 'cash_box' || accType === 'fund' || accType === 'debt' || accType === 'receivable')) {
+          // Tarjeta, caja (Vibra Lejana), fondo (Ahorro Emma), deuda o persona que me debe: un egreso baja el saldo, un ingreso lo sube. No toca el flujo de caja.
           const date = a.date ?? new Date().toISOString().slice(0, 10);
           const value = Math.abs(parseAmount(a.amount));
           const id = await addEntry(db, userId, sid, { date, concept: a.item, rawAmount: a.kind === 'income' ? value : -value });

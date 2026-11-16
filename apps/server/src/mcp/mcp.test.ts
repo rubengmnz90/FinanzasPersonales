@@ -181,6 +181,26 @@ describe('herramientas MCP', () => {
     await c.close();
   });
 
+  it('add_transaction en un fondo (Ahorro Emma) descuenta y devuelve el saldo sin pasar por el flujo', async () => {
+    const cookie = await webLogin('a@test.io', 'clave-a-12345');
+    const { tokens } = await fullFlow(cookie);
+    const c = await connect(tokens.access_token);
+    await ctx.db.query(
+      `INSERT INTO accounts(user_id,type,name) SELECT id,'fund','Fondo Test' FROM users WHERE email='a@test.io' ON CONFLICT DO NOTHING`,
+    );
+    const dep = await call(c, 'add_transaction', { account: 'Fondo Test', kind: 'income', item: 'Aporte', amount: 130000, date: '2026-11-10' });
+    expect(dep.isError).toBe(false);
+    const out = await call(c, 'add_transaction', { account: 'Fondo Test', kind: 'expense', item: 'Salud Emma', amount: 70000, date: '2026-11-16' });
+    expect(out.isError).toBe(false);
+    const accs = await call(c, 'list_accounts', {});
+    const fund = (accs.json as any[]).find((a) => a.name === 'Fondo Test');
+    expect(fund.balance).toBe(60000);
+    // no toca el flujo de caja
+    const sum = await call(c, 'monthly_summary', { year: 2026, month: 11 });
+    expect(sum.json.expense).toBe(0);
+    await c.close();
+  });
+
   it('un token solo de lectura no puede escribir', async () => {
     const cookie = await webLogin('a@test.io', 'clave-a-12345');
     const { tokens } = await fullFlow(cookie, ['finanzas:read']);
