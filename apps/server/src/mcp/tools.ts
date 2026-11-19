@@ -6,7 +6,7 @@ import { GROUPS, categoryIdByName, createCategory, deleteCategory, listCategorie
 import { createTransaction, deleteTransaction, listTransactions, updateTransaction } from '../modules/transactions/service';
 import { createPlannedExpense, listPlannedExpenses, markDone } from '../modules/planned-expenses/service';
 import { comparePlans, getPlanView, listPlans } from '../modules/plans/service';
-import { accountIdByName, accountStatement, addEntry, deleteEntry, findEntry, getAccount, listBalances, savingsOverview, updateEntry } from '../modules/ledgers/service';
+import { accountIdByName, accountStatement, addEntry, deleteEntry, findEntry, getAccount, listBalances, listUncategorizedCardPurchases, savingsOverview, updateEntry } from '../modules/ledgers/service';
 import { createTransfer, deleteTransfer, listBuckets, saveBucket } from '../modules/transfers/service';
 import { listPendingRegularization, regularize } from '../modules/regularize/service';
 import { listAudit, revertAction } from '../modules/audit/service';
@@ -230,6 +230,18 @@ export function createMcpServer(ctx: McpCtx): McpServer {
     return { ok: true };
   });
 
+  tool(
+    'uncategorized_card_purchases',
+    'finanzas:read',
+    'Compras de tarjeta sin rubro: no cuentan en los resúmenes por rubro hasta tener uno. Devuelve cada compra (id, fecha, concepto, monto, tarjeta) con un rubro sugerido según tu historial (`suggested`, null si no hay pista) y el total. Para asignar el rubro usa update_transaction con el id y `category`.',
+    {},
+    async () => {
+      const rows = await listUncategorizedCardPurchases(db, userId);
+      const out = [];
+      for (const r of rows) out.push({ ...r, suggested: (await suggestCategories(db, userId, r.concept))[0]?.category ?? null });
+      return { count: out.length, total: out.reduce((s, r) => s + r.amount, 0), purchases: out };
+    },
+  );
   tool(
     'pending_regularization',
     'finanzas:read',

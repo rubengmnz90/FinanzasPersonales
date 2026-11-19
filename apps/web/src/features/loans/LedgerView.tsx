@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { del, get, patch, post, qs } from '../../app/api';
-import type { Ledger, LedgerEntry } from '../../app/types';
+import type { Category, Ledger, LedgerEntry } from '../../app/types';
 import { DataGrid, type Column } from '../../components/DataGrid';
 import { Button } from '../../components/ui/button';
 import { Input, NativeSelect } from '../../components/ui/input';
@@ -21,9 +21,11 @@ export const BOX_LABELS: LedgerLabels = { plus: 'Ingreso (suma)', minus: 'Egreso
 
 /** Historial editable de una cuenta con movimientos propios (deudas, cajas, fondos y ahorros). */
 export function LedgerView({
-  accountId, labels, showBucket, onChanged, onError,
+  accountId, labels, showBucket, showCategory, onChanged, onError,
 }: {
   accountId: string;
+  /** Muestra la columna editable "Rubro" (tarjetas): sin rubro la compra no cuenta en los informes. */
+  showCategory?: boolean;
   labels: LedgerLabels;
   /** Muestra la columna editable "Objetivo" (ahorros). */
   showBucket?: boolean;
@@ -34,14 +36,31 @@ export function LedgerView({
   const [range, setRange] = useState<Range>({ from: '', to: '' });
   const q = useQuery({ queryKey: ['ledger', accountId, range], queryFn: () => get<Ledger>(`/api/accounts/${accountId}` + qs({ from: range.from, to: range.to })) });
   const l = q.data;
+  const cats = useQuery({ queryKey: ['categories'], queryFn: () => get<Category[]>('/api/categories'), enabled: !!showCategory });
+  const catSearch = (cats.data ?? []).filter((c) => !c.archived).map((c) => ({ value: c.id, label: `${c.name} · ${c.groupName}` }));
+  const normText = (t: string) => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
   // Más nuevo arriba (como el flujo); el saldo de cada fila sigue siendo el acumulado a esa fecha.
   const rows = l ? [...l.entries].reverse() : [];
-  const refresh = async () => { await qc.invalidateQueries({ queryKey: ['ledger'] }); await onChanged(); };
+  const refresh = async () => { await Promise.all(['ledger', 'statement', 'health', 'summary'].map((k) => qc.invalidateQueries({ queryKey: [k] }))); await onChanged(); };
   if (!l) return null;
+  const uncategorized = l.entries.filter((e) => e.amount < 0 && !e.categoryId).length;
 
   const columns: Column<LedgerEntry>[] = [
     { key: 'date', label: 'Fecha', width: 120, kind: 'date', editable: true, value: (r) => r.date },
     { key: 'concept', label: 'Concepto', width: 280, editable: true, value: (r) => r.concept },
+    ...(showCategory ? [{
+      key: 'category', label: 'Rubro', width: 200, kind: 'search', editable: (r: LedgerEntry) => r.amount < 0, options: catSearch,
+      value: (r: LedgerEntry) => r.categoryId ?? '',
+      editText: (r: LedgerEntry) => catSearch.find((o) => o.value === r.categoryId)?.label ?? '',
+      parse: (draft: string) => {
+        const d = normText(draft.trim());
+        if (!d) return '';
+        const hit = catSearch.find((o) => normText(o.label) === d) ?? catSearch.find((o) => normText(o.label).startsWith(d)) ?? catSearch.find((o) => normText(o.label).includes(d));
+        if (!hit) throw new Error(`No hay un rubro que coincida con "${draft}". Créalo en Categorías o con «+ Crear» al cargar la compra.`);
+        return hit.value;
+      },
+      display: (r: LedgerEntry) => (r.amount < 0 ? (r.categoryName ?? <span className="warn">Sin rubro</span>) : ''),
+    } as Column<LedgerEntry>] : []),
     ...(showBucket ? [{ key: 'bucket', label: 'Objetivo', width: 140, editable: true, value: (r: LedgerEntry) => r.bucket ?? '' } as Column<LedgerEntry>] : []),
     ...(showBucket ? [{ key: 'person', label: 'Persona', width: 150, editable: true, value: (r: LedgerEntry) => r.person ?? '' } as Column<LedgerEntry>] : []),
     { key: 'amount', label: 'Monto', width: 140, align: 'right', kind: 'money', editable: true, value: (r) => r.amount, display: (r) => <Money v={r.amount} signed /> },
@@ -73,6 +92,9 @@ export function LedgerView({
       <p className="mb-3 text-sm">
         Saldo: <b><Money v={l.balance} signed /></b>{l.owed > 0 && <> · Debes <b className="neg">{money(l.owed)}</b></>}
       </p>
+      {showCategory && uncategorized > 0 && (
+        <p className="warn mb-3 text-sm">{uncategorized} {uncategorized === 1 ? 'compra sin rubro' : 'compras sin rubro'}: no cuenta{uncategorized === 1 ? '' : 'n'} en los informes. Haz doble clic en «Rubro» para asignarlo.</p>
+      )}
       <AddEntry accountId={l.account.id} labels={labels} showBucket={showBucket} onAdded={refresh} onError={onError} />
       <DataGrid
         ariaLabel={labels.grid}
@@ -82,7 +104,7 @@ export function LedgerView({
         onError={onError}
         height={Math.min(520, 34 * (rows.length + 2))}
         onCommit={async (id, col, raw) => {
-          await patch(`/api/entries/${id}`, col === 'amount' ? { rawAmount: raw } : col === 'bucket' ? { bucket: raw.trim() || null } : col === 'person' ? { person: raw.trim() || null } : { [col]: raw });
+          await patch(`/api/entries/${id}`, col === 'amount' ? { rawAmount: raw } : col === 'category' ? { categoryId: raw || null } : col === 'bucket' ? { bucket: raw.trim() || null } : col === 'person' ? { person: raw.trim() || null } : { [col]: raw });
           await refresh();
         }}
       />

@@ -58,10 +58,16 @@ export async function healthReport(db: Queryable, userId: string, asOf?: string)
   const inc = (rows.find((r: any) => r.kind === 'income')?.s ?? 0) / 3;
   const exp = (rows.find((r: any) => r.kind === 'expense')?.s ?? 0) / 3;
 
+  // Movimientos sin rubro: del flujo y compras de tarjeta (estas no cuentan en los informes hasta tener rubro).
   const unc = (await db.query(
-    `SELECT COUNT(*) AS n, (SELECT COUNT(*) FROM transactions WHERE user_id=$1 AND date >= $2 AND date <= $3) AS total
-     FROM transactions t LEFT JOIN categories c ON c.id=t.category_id
-     WHERE t.user_id=$1 AND t.date >= $2 AND t.date <= $3 AND (t.category_id IS NULL OR c.name='Sin categoría')`,
+    `SELECT COUNT(*) FILTER (WHERE uncat) AS n, COUNT(*) AS total FROM (
+       SELECT (t.category_id IS NULL OR c.name='Sin categoría') AS uncat
+         FROM transactions t LEFT JOIN categories c ON c.id=t.category_id
+         WHERE t.user_id=$1 AND t.date >= $2 AND t.date <= $3
+       UNION ALL
+       SELECT (e.category_id IS NULL) FROM ledger_entries e JOIN accounts a ON a.id=e.account_id
+         WHERE a.user_id=$1 AND a.type='card' AND e.amount < 0 AND e.date >= $2 AND e.date <= $3
+     ) u`,
     [userId, addMonths(at, -3), at],
   )).rows[0];
 

@@ -30,6 +30,10 @@ export interface LedgerEntry {
   bucket: string | null;
   person: string | null;
   balance: number;
+  /** Rubro de la compra (tarjetas); sin rubro no cuenta en los informes. */
+  categoryId: string | null;
+  categoryName: string | null;
+  group: string | null;
 }
 
 const mapAcc = (r: any): Account => ({
@@ -230,6 +234,18 @@ export async function updateEntry(
   );
 }
 
+/** Compras de tarjeta (egresos) sin rubro: no cuentan en los informes hasta que se les asigne uno. */
+export async function listUncategorizedCardPurchases(db: Queryable, userId: string): Promise<{ id: string; date: string; concept: string; amount: number; card: string; group: string | null }[]> {
+  const r = await db.query(
+    `SELECT e.id, e.date::text AS date, e.concept, (-e.amount)::bigint AS amount, a.name AS card, e.group_key
+       FROM ledger_entries e JOIN accounts a ON a.id=e.account_id
+      WHERE a.user_id=$1 AND a.type='card' AND e.amount < 0 AND e.category_id IS NULL
+      ORDER BY e.date DESC, e.seq DESC`,
+    [userId],
+  );
+  return r.rows.map((x: any) => ({ id: x.id, date: x.date, concept: x.concept, amount: Number(x.amount), card: x.card, group: x.group_key }));
+}
+
 /** Movimiento propio de una cuenta (tarjeta, caja, fondo…) del usuario, o null si el id no es uno. */
 export async function findEntry(db: Queryable, userId: string, entryId: string): Promise<{ id: string; accountId: string; amount: number } | null> {
   const r = await db.query(
@@ -280,9 +296,9 @@ export async function getLedger(
   const account = await getAccount(db, userId, accountId);
   const r = await db.query(
     `SELECT * FROM (
-       SELECT id, date, seq, concept, amount, tag, bucket, person,
-              SUM(amount) OVER (ORDER BY date, seq ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS balance
-       FROM ledger_entries WHERE account_id=$1) x
+       SELECT e.id, e.date, e.seq, e.concept, e.amount, e.tag, e.bucket, e.person, e.category_id, c.name AS category_name, e.group_key,
+              SUM(e.amount) OVER (ORDER BY e.date, e.seq ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS balance
+       FROM ledger_entries e LEFT JOIN categories c ON c.id=e.category_id WHERE e.account_id=$1) x
      WHERE ($2::date IS NULL OR date >= $2) AND ($3::date IS NULL OR date <= $3)
      ORDER BY date, seq`,
     [accountId, range.from ?? null, range.to ?? null],
@@ -290,7 +306,7 @@ export async function getLedger(
   const total = (await db.query(`SELECT ${BALANCE_SQL} AS b FROM accounts a WHERE a.id=$1`, [accountId, null])).rows[0].b;
   return {
     account,
-    entries: r.rows.map((e: any) => ({ id: e.id, date: e.date, concept: e.concept, amount: e.amount, tag: e.tag, bucket: e.bucket, person: e.person, balance: e.balance })),
+    entries: r.rows.map((e: any) => ({ id: e.id, date: e.date, concept: e.concept, amount: e.amount, tag: e.tag, bucket: e.bucket, person: e.person, balance: e.balance, categoryId: e.category_id, categoryName: e.category_name, group: e.group_key })),
     balance: total,
     owed: owedOf(account, total),
   };

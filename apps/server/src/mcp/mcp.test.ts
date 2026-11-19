@@ -226,6 +226,15 @@ describe('herramientas MCP', () => {
     const nocat = await call(c, 'add_transaction', { account: 'Tarjeta Prueba', kind: 'expense', item: 'Sin rubro', amount: 1000, date: '2026-09-10' });
     expect(nocat.json.warning).toContain('category');
 
+    // La compra sin rubro aparece en la lista de pendientes y al asignarle rubro cuenta en el resumen.
+    const unc = await call(c, 'uncategorized_card_purchases', {});
+    const mine = unc.json.purchases.find((p: any) => p.concept === 'Sin rubro');
+    expect(mine).toMatchObject({ amount: 1000, card: 'Tarjeta Prueba' });
+    await call(c, 'update_transaction', { id: mine.id, category: 'Juegos' });
+    expect((await call(c, 'uncategorized_card_purchases', {})).json.purchases.some((p: any) => p.id === mine.id)).toBe(false);
+    expect((await call(c, 'monthly_summary', { year: 2026, month: 9 })).json.expense).toBe(382885);
+    await call(c, 'delete_transaction', { id: mine.id }); // para no alterar los totales de abajo
+
     let sum = await call(c, 'monthly_summary', { year: 2026, month: 9 });
     expect(sum.json.expense).toBe(381885);
     expect(sum.json.groups.find((g: any) => g.group === 'Gasto').categories).toEqual([{ name: 'Juegos', total: 381885 }]);

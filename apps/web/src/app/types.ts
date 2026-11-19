@@ -43,7 +43,7 @@ export interface SplitView {
   shareErrors: { itemId: string; sum: number }[];
 }
 export interface RangeSummary { from: string; to: string; groups: { group: string; total: number; categories: { name: string; total: number }[] }[]; income: number; expense: number; net: number }
-export interface LedgerEntry { id: string; date: string; concept: string; amount: number; tag: string | null; bucket: string | null; person: string | null; balance: number }
+export interface LedgerEntry { id: string; date: string; concept: string; amount: number; tag: string | null; bucket: string | null; person: string | null; balance: number; categoryId?: string | null; categoryName?: string | null; group?: string | null }
 export interface Ledger { account: { id: string; type: string; name: string; creditLimit: number | null; counterparty: string | null }; entries: LedgerEntry[]; balance: number; owed: number }
 export interface SavingsBucket { name: string; untouchable: boolean }
 export interface Installment { id: string; number: number; dueDate: string; amount: number; paid: boolean; paidDate: string | null }

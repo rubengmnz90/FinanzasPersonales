@@ -184,7 +184,7 @@ function CardsSection({ cards, onCharge, onRegularize, onPay, onEdit, onChanged 
             <TabsTrigger value="rel">Relatorio</TabsTrigger>
           </TabsList>
           <TabsContent value="mov" className="!mt-5">
-            <LedgerView key={sel.accountId} accountId={sel.accountId} labels={CARD_LABELS} onChanged={onChanged} onError={toast.error} />
+            <LedgerView key={sel.accountId} accountId={sel.accountId} labels={CARD_LABELS} showCategory onChanged={onChanged} onError={toast.error} />
           </TabsContent>
           <TabsContent value="rel" className="!mt-5">
             <StatementView accounts={[sel]} accountId={sel.accountId} onAccount={() => undefined} asOf={today()} />
